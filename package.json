@@ -1,0 +1,28 @@
+{
+  "name": "trashboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "types": "wrangler types",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "db:migrate:local": "wrangler d1 migrations apply trashboard --local",
+    "db:migrate:remote": "wrangler d1 migrations apply trashboard --remote"
+  },
+  "dependencies": {
+    "@typesafe-ai/sdk": "^0.6.0",
+    "hono": "^4.13.8",
+    "neverthrow": "^8.2.0",
+    "ts-pattern": "^5.9.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4",
+    "wrangler": "^4.136.3"
+  }
+}

@@ -1,0 +1,75 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "trashboard",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-09-01",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"workers_dev": true,
+	"observability": {
+		"enabled": true
+	},
+	// Each source runs once a day. 19:00 UTC is 05:00 in Brisbane, before the
+	// working day starts.
+	"triggers": {
+		"crons": [
+			"0 19 * * *"
+		]
+	},
+	"d1_databases": [
+		// TODO: replace with the ID from `wrangler d1 create trashboard` before deploy.
+		{
+			"binding": "DB",
+			"database_name": "trashboard",
+			"database_id": "1e80d24a-e2ce-4f9a-b7af-d0b31aad10c0",
+			"migrations_dir": "migrations"
+		},
+		{
+			"binding": "trashboard",
+			"database_name": "trashboard",
+			"database_id": "1e80d24a-e2ce-4f9a-b7af-d0b31aad10c0"
+		}
+	],
+	// Raw copy of each fetched file. A parser change can then run again over
+	// old data without a new fetch.
+	"r2_buckets": [
+		{
+			"binding": "RAW",
+			"bucket_name": "trashboard-raw"
+		},
+		{
+			"bucket_name": "trashboard-raw",
+			"binding": "trashboard_raw"
+		}
+	],
+	"queues": {
+		"producers": [
+			{
+				"binding": "INGEST_QUEUE",
+				"queue": "trashboard-ingest"
+			},
+			{
+				"binding": "ITEM_QUEUE",
+				"queue": "trashboard-items"
+			}
+		],
+		"consumers": [
+			// One message for each invocation. On the Workers Free plan an invocation
+			// has 10 ms of CPU and 50 subrequests.
+			{
+				"queue": "trashboard-ingest",
+				"max_batch_size": 1,
+				"max_retries": 3
+			},
+			// A message holds up to 10 items: 10 Jev requests and up to 10 detail pages.
+			// Two at a time keep the detail page fetches polite to the source sites.
+			{
+				"queue": "trashboard-items",
+				"max_batch_size": 1,
+				"max_retries": 3,
+				"max_concurrency": 2
+			}
+		]
+	}
+}

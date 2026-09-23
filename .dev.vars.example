@@ -1,0 +1,5 @@
+TYPESAFE_API_KEY=
+# The password that opens the dashboard.
+DASHBOARD_PASSWORD=
+# A long random string. It signs the login cookie.
+SESSION_SECRET=
