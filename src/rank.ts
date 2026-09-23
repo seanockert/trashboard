@@ -13,7 +13,11 @@ export const SERIOUS_MIN = 2;
 // effect on waste operations, for example river health reports or mine licences.
 export const PRIORITY_MIN = 0.15;
 
-const WEIGHTS = { impact: 1, action: 0.5, submissions: 0.3 };
+// Priority bands for the badge on each card. Calibrate on real data.
+export const PRIORITY_HIGH = 0.45;
+export const PRIORITY_MEDIUM = 0.25;
+
+const WEIGHTS ={ impact: 1, action: 0.5, submissions: 0.3 };
 
 const answer = (path: string) => `COALESCE(json_extract(answers, '$.${path}'), 0)`;
 

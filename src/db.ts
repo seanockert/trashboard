@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Jurisdiction, type NewItem, type StoredItem } from './items';
+import { Jurisdiction, TrackStatus, type NewItem, type StoredItem, type Tracking } from './items';
 import { findPartyGroup } from './parties';
 import { flagSql, IS_RELEVANT_SQL, IS_SERIOUS_SQL, IS_WASTE_OPERATOR_SQL, OFFENCE_SQL, PRIORITY_SQL, type FlagKey } from './rank';
 
@@ -242,12 +242,55 @@ export const enforcementPage = (db: D1Database) => async (q: EnforcementQuery) =
   };
 };
 
+const prefixed = ITEM_COLUMNS.split(', ').map((c) => `items.${c}`).join(', ');
+
+const TrackingRow = z.object({ item_id: z.string(), status: TrackStatus, note: z.string() });
+
+// The tracking of the items on one page.
+export const trackingFor = (db: D1Database) => async (ids: string[]): Promise<Map<string, Tracking>> => {
+  if (ids.length === 0) return new Map();
+  const result = await db
+    .prepare(`SELECT item_id, status, note FROM tracked WHERE item_id IN (${ids.map((_, i) => `?${i + 1}`).join(', ')})`)
+    .bind(...ids)
+    .all();
+  return new Map(z.array(TrackingRow).parse(result.results).map((row) => [row.item_id, { status: row.status, note: row.note }]));
+};
+
+// All tracked items. "Acting" first, then the most recent change.
+export const trackedItems = (db: D1Database) => async () => {
+  const result = await db
+    .prepare(`SELECT ${prefixed}, tracked.status, tracked.note FROM tracked JOIN items ON items.id = tracked.item_id ORDER BY tracked.status = 'acting' DESC, tracked.updated_at DESC`)
+    .all();
+  const tracking = z.array(z.object({ status: TrackStatus, note: z.string() })).parse(result.results);
+  return parseRows(result).flatMap((item, i) => {
+    const t = tracking[i];
+    return t === undefined ? [] : [{ item, tracking: { status: t.status, note: t.note } }];
+  });
+};
+
+// A null status stops the tracking of the item.
+export const saveTracking =
+  (db: D1Database) =>
+  async ({ itemId: id, status, note, now }: { itemId: string; status: TrackStatus | null; note: string; now: Date }) => {
+    if (status === null) {
+      await db.prepare('DELETE FROM tracked WHERE item_id = ?1').bind(id).run();
+      return;
+    }
+    await db
+      .prepare(
+        `INSERT INTO tracked (item_id, status, note, updated_at) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT (item_id) DO UPDATE SET status = excluded.status, note = excluded.note, updated_at = excluded.updated_at`,
+      )
+      .bind(id, status, note, now.toISOString())
+      .run();
+  };
+
 // BM25 over title, body and party. The weights make a title match count most.
 export const searchItems = (db: D1Database) => async ({ query, limit }: { query: string; limit: number }) =>
   parseRows(
     await db
       .prepare(
-        `SELECT ${ITEM_COLUMNS.split(', ').map((c) => `items.${c}`).join(', ')} FROM items_fts
+        `SELECT ${prefixed} FROM items_fts
          JOIN items ON items.rowid = items_fts.rowid
          WHERE items_fts MATCH ?1
          ORDER BY bm25(items_fts, 3.0, 1.0, 2.0)

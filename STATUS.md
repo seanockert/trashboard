@@ -22,6 +22,7 @@ Code does the filters, the ranking, the dates and the company matches.
 | Enforcement view (JJR and competitors) | Done |
 | Search (D1 full-text search, then Jev rerank) | Done |
 | Password login | Done |
+| Bookmarks (Watching or Acting, with a note) | Done |
 | Unit tests (parsers, company filter, dates, penalty selection) | Done, 56 tests |
 | Fit the Workers Free plan (10 ms CPU, 50 subrequests for each invocation) | Done locally. Check real CPU time after deploy |
 | Deploy to Cloudflare (`trashboard.seanockert.workers.dev`) | Not started |
@@ -32,16 +33,23 @@ Code does the filters, the ranking, the dates and the company matches.
 | Source | Kind | Access | Notes |
 | --- | --- | --- | --- |
 | Federal Register of Legislation | Regulatory | OData API | New titles with the administering department |
-| QLD legislation | Regulatory | Atom feeds | New Acts, subordinate legislation and bills. Law text from the "whole" view |
-| NSW legislation | Regulatory | Atom feeds | Title only. The site blocks automated text requests |
+| QLD legislation | Regulatory | Atom feeds, query endpoint for backfill | New Acts, subordinate legislation and bills. Law text from the "whole" view |
+| NSW legislation | Regulatory | Atom feeds | Title only. The site blocks automated text requests. No backfill: the feeds keep one week |
 | VIC legislation | Regulatory | Site search endpoint | Not a documented API |
-| TAS legislation | Regulatory | Atom feed | Law text from the "whole" view |
-| NSW EPA news | Regulatory | HTML | Article text from each page |
+| TAS legislation | Regulatory | Atom feed, query endpoint for backfill | Law text from the "whole" view |
+| NSW EPA news | Regulatory | HTML | Article text from each page. A backfill reads the list pages to its start date |
 | EPA Victoria news | Regulatory | Site search endpoint | Not a documented API |
 | QLD enforcement register | Enforcement | CKAN datastore API | No description of the conduct. Code reads the ERA codes |
 | EPA Victoria court proceedings | Enforcement | JSON endpoint | Full summary from each page |
 | WA DWER enforcement | Enforcement | HTML tables | Notices, penalty notices, prosecutions |
 | SA EPA prosecutions | Enforcement | HTML table | Needs a browser-like user agent |
+
+## Backfill
+
+"Load past 12 months" on the Sources page sends a run with a start date to each source.
+The Federal Register, VIC and NSW EPA sources page back to the start date. QLD and TAS use the query endpoint behind the browse pages (not a documented API). NSW legislation and the enforcement sources ignore the start date. The enforcement sources hold their full history already.
+A new item gets tags. An item that is stored already, with the same content, does not.
+The first run of the Federal Register and VIC sources also goes back 12 months.
 
 ## Measured results (local run, 2026-09-23)
 
@@ -77,6 +85,7 @@ A better measure is precision above a priority threshold, and recall on a labell
 ## Before deploy
 
 - Create the D1 database `trashboard`, the R2 bucket `trashboard-raw` and the queues `trashboard-ingest` and `trashboard-items`, then put the database ID in `wrangler.jsonc`.
+- Apply the migrations: `npm run db:migrate:remote`.
 - Set the secrets: `TYPESAFE_API_KEY`, `DASHBOARD_PASSWORD`, `SESSION_SECRET`.
 - Test the SA EPA source from Cloudflare. CloudFront can block Cloudflare egress addresses.
 
@@ -85,7 +94,7 @@ A better measure is precision above a priority threshold, and recall on a labell
 - Case law: NSW Land and Environment Court judgments from the Open Australian Legal Corpus (Hugging Face, `isaacus/open-australian-legal-corpus`). Do not use AustLII, because its terms do not permit bots or AI.
 - NSW EPA penalty notices and prosecutions. The register needs ASP.NET form posts. Search only for the names of JJR and its competitors.
 - More sources: WA legislation feeds (slow server), QLD and NSW Government Gazettes (PDF), DCCEEW news, NSW Have Your Say, QLD ministerial statements.
-- Email digest. The digest is a query over tagged items, thus the send step is the only new part.
+- Email digest. The digest is a query over tagged items and tracked items, thus the send step is the only new part.
 - Council contract expiry map from council meeting minutes and tender portals.
 - Paid sources that the user possibly has already, for example TenderLink.
 - Upload of own documents (licence conditions, contracts), with redaction in the browser (Desert Ant Redact). Only after JJR IT approves.

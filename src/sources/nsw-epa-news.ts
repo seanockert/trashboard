@@ -1,9 +1,13 @@
+import { z } from 'zod';
 import { between, decodeEntities, htmlToText } from './html';
 import { getText } from './http';
 import type { Source } from './types';
 
 const SITE = 'https://www.epa.nsw.gov.au';
 const LIST = `${SITE}/news`;
+// A list page holds about one month of releases. This limit stops a backfill
+// if the page links stop having dates.
+const MAX_PAGES = 30;
 
 // Links look like "/news/epamedia/260921-slug". The first six digits are the date.
 const dateFromSlug = (slug: string) => {
@@ -39,5 +43,14 @@ export const nswEpaNews: Source = {
   jurisdiction: 'NSW',
   homepage: LIST,
   extractDetail: extractNswEpaArticle,
-  run: () => getText({ url: LIST }).map(({ text }) => ({ type: 'changed' as const, records: parseNswEpaList(text), cursor: null, next: null, raw: [] })),
+  // A daily run reads the first page. A backfill reads the pages after it, to its start date.
+  run: ({ page, since }) => {
+    const index = z.number().catch(0).parse(page ?? 0);
+    return getText({ url: index === 0 ? LIST : `${LIST}?page=${index}` }).map(({ text }) => {
+      const records = parseNswEpaList(text);
+      const oldest = records.flatMap((r) => (r.publishedAt === null ? [] : [r.publishedAt])).sort()[0];
+      const more = since !== null && oldest !== undefined && oldest > since.slice(0, 10) && index + 1 < MAX_PAGES;
+      return { type: 'changed' as const, records, cursor: null, next: more ? index + 1 : null, raw: [] };
+    });
+  },
 };

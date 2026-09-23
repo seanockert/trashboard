@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { EnforcementAnswers, LINES_OF_BUSINESS, OFFENCES, RegulatoryAnswers, TOPICS } from '../jev/answers';
 import { Jurisdiction, type StoredItem } from '../items';
 import { PARTY_GROUPS } from '../parties';
-import { FLAG_MIN, type FlagKey } from '../rank';
+import { FLAG_MIN, PRIORITY_HIGH, PRIORITY_MEDIUM, type FlagKey } from '../rank';
 
 export const PAGE_SIZE = 50;
 
@@ -74,20 +74,61 @@ export const EnforcementFilters = z.object({
 });
 export type EnforcementFilters = z.infer<typeof EnforcementFilters>;
 
+// Legislation feeds give only a label and the title, for example "Act: <title>".
+// A body with less than this much text beside the title adds nothing to the card.
+const SNIPPET_MIN_EXTRA = 40;
+
+export const snippet = (item: StoredItem) =>
+  item.body.includes(item.title) && item.body.length - item.title.length < SNIPPET_MIN_EXTRA ? '' : item.body;
+
 export const sinceDate = (days: number, now: Date) => new Date(now.getTime() - days * 86_400_000).toISOString().slice(0, 10);
 
-export type ChangeRow = { item: StoredItem; answers: RegulatoryAnswers; priority: number; lines: string[]; topics: string[] };
+export type Tag<K extends string = string> = { key: K; label: string };
+export type PriorityLevel = 'high' | 'medium' | 'low';
+
+export type ChangeRow = {
+  item: StoredItem;
+  answers: RegulatoryAnswers;
+  priority: number;
+  level: PriorityLevel;
+  reasons: string[];
+  lines: Tag<(typeof LINES_OF_BUSINESS)[number]>[];
+  topics: Tag<(typeof TOPICS)[number]>[];
+};
 export type EnforcementRow = { item: StoredItem; answers: EnforcementAnswers };
 
-const flaggedLabels = <K extends string>({ answers, keys, labels }: { answers: Record<K, { noul: number }>; keys: readonly K[]; labels: Record<K, string> }) =>
-  keys.filter((key) => answers[key].noul >= FLAG_MIN).map((key) => labels[key]);
+const flagged = <K extends string>({ answers, keys, labels }: { answers: Record<K, { noul: number }>; keys: readonly K[]; labels: Record<K, string> }): Tag<K>[] =>
+  keys.filter((key) => answers[key].noul >= FLAG_MIN).map((key) => ({ key, label: labels[key] }));
+
+export const priorityLevel = (priority: number): PriorityLevel =>
+  priority >= PRIORITY_HIGH ? 'high' : priority >= PRIORITY_MEDIUM ? 'medium' : 'low';
+
+// Short text for each level of the `wasteFocus` and `impact` Scores in src/jev/questions.ts.
+const FOCUS_REASONS = ['Not about waste', 'General business rule', 'Environment rule', 'About waste'];
+const IMPACT_REASONS = ['No effect on operations', 'Background only', 'Small admin change', 'Compliance change', 'Large cost or operations change'];
+
+// Why an item has its priority, from the Jev answers that make the priority.
+export const priorityReasons = (answers: RegulatoryAnswers): string[] => {
+  const focus = Object.entries(answers.wasteFocus.probabilities).toSorted((a, b) => b[1] - a[1])[0]?.[0];
+  return [FOCUS_REASONS[Number(focus)], IMPACT_REASONS[Math.round(answers.impact.score)]].filter((text) => text !== undefined);
+};
 
 // Only the rows on the page are parsed. D1 did the filters, the sort and the counts.
 export const toChangeRows = (rows: { item: StoredItem; priority: number }[]): ChangeRow[] =>
   rows.flatMap(({ item, priority }) => {
     const parsed = RegulatoryAnswers.safeParse(item.answers);
     if (!parsed.success) return [];
-    return [{ item, priority, answers: parsed.data, lines: flaggedLabels({ answers: parsed.data, keys: LINES_OF_BUSINESS, labels: LOB_LABELS }), topics: flaggedLabels({ answers: parsed.data, keys: TOPICS, labels: TOPIC_LABELS }) }];
+    return [
+      {
+        item,
+        priority,
+        answers: parsed.data,
+        level: priorityLevel(priority),
+        reasons: priorityReasons(parsed.data),
+        lines: flagged({ answers: parsed.data, keys: LINES_OF_BUSINESS, labels: LOB_LABELS }),
+        topics: flagged({ answers: parsed.data, keys: TOPICS, labels: TOPIC_LABELS }),
+      },
+    ];
   });
 
 export const toEnforcementRows = (items: StoredItem[]): EnforcementRow[] =>

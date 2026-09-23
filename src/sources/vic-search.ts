@@ -1,13 +1,13 @@
 import { errAsync, okAsync, ResultAsync } from 'neverthrow';
 import { z } from 'zod';
 import { htmlToText } from './html';
-import type { FetchOutcome, Source, SourceError } from './types';
+import type { FetchOutcome, Source, SourceContext, SourceError } from './types';
 
 // Victorian government sites run on one platform with an open search proxy.
 // It is not a documented API, thus the schema check here fails loudly if it changes.
 
 const USER_AGENT = 'Trashboard/0.1 (private research tool; one request per source per day)';
-const FIRST_RUN_DAYS = 30;
+const FIRST_RUN_DAYS = 365;
 const SIZE = 200;
 
 const searchPost = ({ url, body }: { url: string; body: unknown }) =>
@@ -29,22 +29,60 @@ const searchPost = ({ url, body }: { url: string; body: unknown }) =>
 const first = z.array(z.string()).transform((list) => list[0] ?? '');
 const firstOptional = z.array(z.string()).optional().transform((list) => list?.[0] ?? '');
 
+// The article text often starts with the landing page summary. Keep one copy.
+export const newsBody = (summary: string, text: string) =>
+  summary === '' || text.startsWith(summary) ? text : text === '' ? summary : `${summary}\n${text}`;
+
 const Hits = z.object({ hits: z.object({ hits: z.array(z.object({ _source: z.unknown() })) }) });
 
-const sinceOf = ({ cursor, now }: { cursor: string | null; now: Date }) => cursor ?? new Date(now.getTime() - FIRST_RUN_DAYS * 86_400_000).toISOString();
+const firstRunSince = (now: Date) => new Date(now.getTime() - FIRST_RUN_DAYS * 86_400_000).toISOString();
 
+const PageState = z.object({ since: z.string(), from: z.number(), newest: z.string().nullable() });
+
+// Oldest first, thus a new item that arrives during a run goes to the end and does not move a page.
 const run =
-  <T extends z.ZodType, R>({ url, query, schema, toItem, dateOf }: { url: string; query: (since: string) => unknown; schema: T; toItem: (hit: z.infer<T>) => R; dateOf: (hit: z.infer<T>) => string }) =>
-  ({ cursor, now }: { cursor: string | null; now: Date }) =>
-    searchPost({ url, body: query(sinceOf({ cursor, now })) }).andThen((json) => {
+  <T extends z.ZodType, R>({
+    url,
+    dateField,
+    dateOf,
+    filters,
+    schema,
+    toItem,
+  }: {
+    url: string;
+    dateField: string;
+    dateOf: (hit: z.infer<T>) => string;
+    filters: unknown[];
+    schema: T;
+    toItem: (hit: z.infer<T>) => R;
+  }) =>
+  ({ cursor, now, page, since }: SourceContext): ResultAsync<FetchOutcome, SourceError> => {
+    const state = page === null ? { since: since ?? cursor ?? firstRunSince(now), from: 0, newest: null } : PageState.safeParse(page).data;
+    if (state === undefined) return errAsync({ type: 'parse', url, message: 'The page state is not valid.' });
+    const body = {
+      size: SIZE,
+      from: state.from,
+      _source: { excludes: ['es_attachment*', 'rendered_item*'] },
+      query: { bool: { filter: [...filters, { range: { [dateField]: { gte: state.since } } }] } },
+      sort: [{ [dateField]: 'asc' }],
+    };
+    return searchPost({ url, body }).andThen((json) => {
       const envelope = Hits.safeParse(json);
       const parsed = z.array(schema).safeParse(envelope.success ? envelope.data.hits.hits.map((h) => h._source) : null);
       if (!parsed.success) return errAsync<FetchOutcome, SourceError>({ type: 'parse', url, message: parsed.error.message });
       const hits = parsed.data;
-      if (hits.length === 0) return okAsync<FetchOutcome, SourceError>({ type: 'unchanged' });
-      const newest = hits.map(dateOf).sort().at(-1) ?? null;
-      return okAsync<FetchOutcome, SourceError>({ type: 'changed', records: hits.map(toItem), cursor: newest, next: null, raw: [{ name: 'search.json', body: JSON.stringify(json) }] });
+      if (state.from === 0 && hits.length === 0) return okAsync<FetchOutcome, SourceError>({ type: 'unchanged' });
+      const newest = [state.newest, ...hits.map(dateOf)].filter((d): d is string => d !== null).sort().at(-1) ?? null;
+      const isLast = hits.length < SIZE;
+      return okAsync<FetchOutcome, SourceError>({
+        type: 'changed',
+        records: hits.map(toItem),
+        cursor: newest ?? state.since,
+        next: isLast ? null : { since: state.since, from: state.from + SIZE, newest },
+        raw: [{ name: `search-${state.from}.json`, body: JSON.stringify(json) }],
+      });
     });
+  };
 
 const LEGISLATION_URL = 'https://www.legislation.vic.gov.au/api/tide/elasticsearch/content-legislation-vic-gov-au__production__sapi_node/_search';
 
@@ -74,13 +112,9 @@ export const vicLegislation: Source = {
   run: run({
     url: LEGISLATION_URL,
     schema: LegislationHit,
+    dateField: 'changed',
     dateOf: (hit) => hit.changed,
-    query: (since) => ({
-      size: SIZE,
-      _source: { excludes: ['es_attachment*', 'rendered_item*'] },
-      query: { bool: { filter: [{ terms: { type: Object.keys(LEGISLATION_TYPES) } }, { range: { changed: { gte: since } } }] } },
-      sort: [{ changed: 'desc' }],
-    }),
+    filters: [{ terms: { type: Object.keys(LEGISLATION_TYPES) } }],
     toItem: (hit) => {
       const version = hit.field_in_force_version_number?.[0] ?? '';
       const label = LEGISLATION_TYPES[hit.type] ?? hit.type;
@@ -119,13 +153,9 @@ export const epaVicNews: Source = {
   run: run({
     url: EPA_URL,
     schema: NewsHit,
+    dateField: 'created',
     dateOf: (hit) => hit.created,
-    query: (since) => ({
-      size: SIZE,
-      _source: { excludes: ['es_attachment*', 'rendered_item*'] },
-      query: { bool: { filter: [{ terms: { type: ['news', 'media_release'] } }, { terms: { field_node_site: [EPA_SITE_ID] } }, { range: { created: { gte: since } } }] } },
-      sort: [{ created: 'desc' }],
-    }),
+    filters: [{ terms: { type: ['news', 'media_release'] } }, { terms: { field_node_site: [EPA_SITE_ID] } }],
     toItem: (hit) => ({
       kind: 'regulatory',
       externalId: String(hit.nid[0] ?? hit.url),
@@ -133,7 +163,7 @@ export const epaVicNews: Source = {
       title: hit.title,
       url: `https://www.epa.vic.gov.au${hit.url.replace(/^\/site-\d+/, '')}`,
       publishedAt: (hit.field_news_date || hit.created).slice(0, 10),
-      body: [hit.field_landing_page_summary, htmlToText(hit.body)].filter((text) => text !== '').join('\n'),
+      body: newsBody(hit.field_landing_page_summary, htmlToText(hit.body)),
     }),
   }),
 };

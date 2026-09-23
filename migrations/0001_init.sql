@@ -66,3 +66,11 @@ CREATE TABLE source_runs (
 );
 
 CREATE INDEX source_runs_recent ON source_runs (source_id, started_at DESC);
+
+-- Items the user tracks, with a short note. Tags and text can change; the row stays.
+CREATE TABLE tracked (
+  item_id    TEXT PRIMARY KEY REFERENCES items (id) ON DELETE CASCADE,
+  status     TEXT NOT NULL CHECK (status IN ('watching', 'acting')),
+  note       TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL
+);

@@ -13,7 +13,8 @@ import type { SourceError } from './sources/types';
 // The Workers Free plan gives each invocation 10 ms of CPU and 50 subrequests.
 // Thus one ingest message is one page of one source, and one item message is
 // a small group of items.
-export const IngestMessage = z.object({ sourceId: z.string(), page: z.unknown().default(null) });
+// `since` starts a backfill from that date. Each page of the run carries it.
+export const IngestMessage = z.object({ sourceId: z.string(), page: z.unknown().default(null), since: z.string().nullable().default(null) });
 export const ItemMessage = z.object({ itemIds: z.array(z.string()).min(1), attempt: z.number().int().default(1) });
 
 export const ITEMS_PER_MESSAGE = 10;
@@ -45,8 +46,8 @@ const checkRecords = (records: unknown[]): Checked =>
 
 const chunks = <T>(list: T[], size: number) => Array.from({ length: Math.ceil(list.length / size) }, (_, i) => list.slice(i * size, (i + 1) * size));
 
-export const scheduleAll = async (env: Env) => {
-  await env.INGEST_QUEUE.sendBatch(SOURCES.map((source) => ({ body: { sourceId: source.id, page: null } })));
+export const scheduleAll = async (env: Env, since: string | null = null) => {
+  await env.INGEST_QUEUE.sendBatch(SOURCES.map((source) => ({ body: { sourceId: source.id, page: null, since } })));
 };
 
 export const sendItemMessages = async ({ env, itemIds, attempt = 1, delaySeconds = 0 }: { env: Env; itemIds: string[]; attempt?: number; delaySeconds?: number }) => {
@@ -56,12 +57,12 @@ export const sendItemMessages = async ({ env, itemIds, attempt = 1, delaySeconds
 };
 
 // Runs one page of one source. The next page, if any, goes back on the queue.
-export const ingestPage = async ({ env, sourceId, page }: { env: Env; sourceId: string; page: unknown }) => {
+export const ingestPage = async ({ env, sourceId, page, since }: { env: Env; sourceId: string; page: unknown; since: string | null }) => {
   const source = sourceById(sourceId);
   if (source === undefined) throw new Error(`Unknown source: ${sourceId}`);
   const startedAt = new Date();
   const cursor = await getCursor(env.DB)(sourceId);
-  const outcome = await source.run({ cursor, now: startedAt, page });
+  const outcome = await source.run({ cursor, now: startedAt, page, since });
   const run = { sourceId, startedAt, firstPage: page === null };
 
   if (outcome.isErr()) {
@@ -87,7 +88,7 @@ export const ingestPage = async ({ env, sourceId, page }: { env: Env; sourceId: 
   await sendItemMessages({ env, itemIds: changedIds });
 
   const isLast = next === null;
-  if (!isLast) await env.INGEST_QUEUE.send({ sourceId, page: next });
+  if (!isLast) await env.INGEST_QUEUE.send({ sourceId, page: next, since });
   // A stricter rule for personal information also applies to records stored before it.
   const purged = isLast && source.kind === 'enforcement' ? await deleteParties(env.DB)({ sourceId, keep: isCompanyName }) : 0;
 

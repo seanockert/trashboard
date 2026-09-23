@@ -8,8 +8,9 @@ import type { FetchOutcome, Source, SourceError } from './types';
 const API = 'https://api.prod.legislation.gov.au/v1/Titles';
 const SITE = 'https://www.legislation.gov.au';
 const PAGE_SIZE = 200;
-const MAX_PAGES = 10;
-const FIRST_RUN_DAYS = 30;
+// About 3,500 titles each year. A backfill of 12 months needs 18 pages.
+const MAX_PAGES = 30;
+const FIRST_RUN_DAYS = 365;
 
 const COLLECTION_LABELS: Record<string, string> = {
   Act: 'Act',
@@ -88,9 +89,9 @@ export const federalRegister: Source = {
   kind: 'regulatory',
   jurisdiction: 'CTH',
   homepage: SITE,
-  run: ({ cursor, now, page }) => {
+  run: ({ cursor, now, page, since }) => {
     if (page === null) {
-      return fetchPage({ since: cursor ?? new Date(now.getTime() - FIRST_RUN_DAYS * 86_400_000).toISOString(), page: 0, newestSoFar: null });
+      return fetchPage({ since: since ?? cursor ?? new Date(now.getTime() - FIRST_RUN_DAYS * 86_400_000).toISOString(), page: 0, newestSoFar: null });
     }
     const state = PageState.safeParse(page);
     return state.success ? fetchPage({ since: state.data.since, page: state.data.page, newestSoFar: state.data.newest }) : errAsync({ type: 'parse', url: API, message: 'The page state is not valid.' });

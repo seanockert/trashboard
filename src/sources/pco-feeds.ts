@@ -1,9 +1,10 @@
-import { ResultAsync } from 'neverthrow';
+import { errAsync, okAsync, ResultAsync } from 'neverthrow';
+import { z } from 'zod';
 import type { Jurisdiction } from '../items';
 import { readAtom, type AtomEntry } from './atom';
 import { between, htmlToText } from './html';
-import { getText } from './http';
-import type { Source, SourceError } from './types';
+import { getJson, getText } from './http';
+import type { FetchOutcome, Source, SourceError } from './types';
 
 // QLD, NSW and TAS use the same legislation platform, with Atom feeds for
 // each kind of change. The feeds keep about one week of items.
@@ -33,6 +34,82 @@ const readFeeds = ({ base, feeds }: { base: string; feeds: FeedSpec[] }) =>
     ResultAsync.fromSafePromise(Promise.resolve([])),
   );
 
+// A backfill reads the query endpoint behind the browse pages, because the
+// feeds keep only one week. It is not a documented API. Each record becomes
+// the entry that its feed gives, thus the item ID is the same from both.
+type Backfill = {
+  ds: string;
+  printTypes: string[];
+  toEntry: (record: DalRecord) => { feed: FeedSpec; entry: AtomEntry };
+};
+
+// TAS cuts a response off at about 32 KB, thus the pages are small.
+const DAL_PAGE_SIZE = 50;
+
+const Value = z.object({ __value__: z.string() });
+const DalRecord = z.object({ id: Value, title: Value, 'publication.date': z.string(), 'print.type': Value });
+type DalRecord = z.infer<typeof DalRecord>;
+// One record comes as an object, not as a list.
+const DalPage = z.object({
+  data: z.union([z.array(DalRecord), DalRecord.transform((record) => [record])]).default([]),
+  totalCount: z.object({ __value__: z.number() }),
+});
+
+export const dalExpression = ({ printTypes, since }: { printTypes: string[]; since: string }) =>
+  `PrintType=(${printTypes.map((t) => `"${t}"`).join(' OR ')}) AND PublicationDate>=${since.slice(0, 10).replace(/-/g, '')}000000`;
+
+export const dalEntries = ({ json, backfill }: { json: unknown; backfill: Backfill }) => {
+  const parsed = DalPage.safeParse(json);
+  if (!parsed.success) return null;
+  return { total: parsed.data.totalCount.__value__, entries: parsed.data.data.map(backfill.toEntry) };
+};
+
+const backfillPage = ({
+  base,
+  backfill,
+  since,
+  start,
+  jurisdiction,
+  textUrl,
+}: {
+  base: string;
+  backfill: Backfill;
+  since: string;
+  start: number;
+  jurisdiction: Jurisdiction;
+  textUrl: ((entry: AtomEntry) => string | null) | null;
+}): ResultAsync<FetchOutcome, SourceError> => {
+  const params = new URLSearchParams({
+    ds: backfill.ds,
+    subset: 'browse',
+    start: String(start),
+    count: String(DAL_PAGE_SIZE),
+    expression: dalExpression({ printTypes: backfill.printTypes, since }),
+    sortField: 'publication.date',
+    sortDirection: 'asc',
+  });
+  const url = `${base}/projectdata?${params}`;
+  return getJson({ url }).andThen(({ json, text }) => {
+    const page = dalEntries({ json, backfill });
+    if (page === null) return errAsync<FetchOutcome, SourceError>({ type: 'parse', url, message: 'The query response is not in the expected form.' });
+    const next = start + DAL_PAGE_SIZE;
+    return okAsync<FetchOutcome, SourceError>({
+      type: 'changed',
+      records: firstOfEachId(page.entries.flatMap(({ feed, entry }) => itemsOf({ entries: [entry], feed, jurisdiction, textUrl }))),
+      cursor: null,
+      next: next > page.total ? null : next,
+      raw: [{ name: `projectdata-${start}.json`, body: text }],
+    });
+  });
+};
+
+const dalEntry = ({ record, link }: { record: DalRecord; link: string }): AtomEntry => ({
+  id: record.id.__value__,
+  title: record.title.__value__,
+  link,
+  updated: record['publication.date'].slice(0, 10),
+});
+
 export const pcoSource = ({
   id,
   name,
@@ -40,6 +117,7 @@ export const pcoSource = ({
   base,
   feeds,
   textUrl,
+  backfill,
 }: {
   id: string;
   name: string;
@@ -47,6 +125,7 @@ export const pcoSource = ({
   base: string;
   feeds: FeedSpec[];
   textUrl: ((entry: AtomEntry) => string | null) | null;
+  backfill: Backfill | null;
 }): Source => ({
   id,
   name,
@@ -54,14 +133,18 @@ export const pcoSource = ({
   jurisdiction,
   homepage: base,
   ...(textUrl === null ? {} : { extractDetail: extractPcoText }),
-  run: () =>
-    readFeeds({ base, feeds }).map((results) => ({
+  run: ({ page, since }) => {
+    if (since !== null && backfill !== null) {
+      return backfillPage({ base, backfill, since, start: z.number().catch(1).parse(page ?? 1), jurisdiction, textUrl });
+    }
+    return readFeeds({ base, feeds }).map((results) => ({
       type: 'changed' as const,
       records: firstOfEachId(results.flatMap(({ feed, entries }) => itemsOf({ entries, feed, jurisdiction, textUrl }))),
       cursor: null,
       next: null,
       raw: results.map(({ feed, xml }) => ({ name: `${feed.id}.xml`, body: xml })),
-    })),
+    }));
+  },
 });
 
 // The law text starts at the fragment view. The table of contents comes before it.
@@ -72,25 +155,44 @@ export const extractPcoText = (html: string) => htmlToText(between({ html, start
 // many megabytes, and its text does not show what changed.
 const wholeView = (entry: AtomEntry) => (entry.link.includes('/view/html/asmade/') ? entry.link.replace('/view/html/', '/view/whole/html/') : null);
 
+const QLD = 'https://www.legislation.qld.gov.au';
+const QLD_NEW_LEGISLATION: FeedSpec = { id: 'newlegislation', label: 'New Act or subordinate legislation' };
+const QLD_NEW_BILLS: FeedSpec = { id: 'newbills', label: 'New bill' };
+
 export const qldLegislation = pcoSource({
   id: 'qld-legislation',
   name: 'QLD legislation (new Acts, subordinate legislation and bills)',
   jurisdiction: 'QLD',
-  base: 'https://www.legislation.qld.gov.au',
-  feeds: [
-    { id: 'newlegislation', label: 'New Act or subordinate legislation' },
-    { id: 'newbills', label: 'New bill' },
-  ],
+  base: QLD,
+  feeds: [QLD_NEW_LEGISLATION, QLD_NEW_BILLS],
   textUrl: wholeView,
+  // "act.new" is a new Act and "published" is new subordinate legislation, as made.
+  backfill: {
+    ds: 'OQPC-BrowseDataSource',
+    printTypes: ['act.new', 'published', 'bill.first', 'bill.firstnongovintro'],
+    toEntry: (record) =>
+      record['print.type'].__value__.startsWith('bill.')
+        ? { feed: QLD_NEW_BILLS, entry: dalEntry({ record, link: `${QLD}/view/html/bill.first/${record.id.__value__}` }) }
+        : { feed: QLD_NEW_LEGISLATION, entry: dalEntry({ record, link: `${QLD}/view/html/asmade/${record.id.__value__}` }) },
+  },
 });
+
+const TAS = 'https://www.legislation.tas.gov.au';
+const TAS_WHATS_NEW: FeedSpec = { id: 'whatsnew', label: 'New or changed legislation' };
 
 export const tasLegislation = pcoSource({
   id: 'tas-legislation',
   name: 'TAS legislation (what is new)',
   jurisdiction: 'TAS',
-  base: 'https://www.legislation.tas.gov.au',
-  feeds: [{ id: 'whatsnew', label: 'New or changed legislation' }],
+  base: TAS,
+  feeds: [TAS_WHATS_NEW],
   textUrl: wholeView,
+  // Here "act.new" and "published" are new and changed versions, as in the feed.
+  backfill: {
+    ds: 'EnAct-BrowseDataSource',
+    printTypes: ['act.new', 'published'],
+    toEntry: (record) => ({ feed: TAS_WHATS_NEW, entry: dalEntry({ record, link: `${TAS}/view/html/inforce/current/${record.id.__value__}` }) }),
+  },
 });
 
 // The NSW site blocks automated requests for the law text, thus Jev sees the title only.
@@ -104,4 +206,6 @@ export const nswLegislation = pcoSource({
     { id: 'newbills', label: 'New bill' },
   ],
   textUrl: null,
+  // The NSW site refuses automated requests to its query endpoint.
+  backfill: null,
 });

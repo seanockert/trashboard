@@ -1,7 +1,8 @@
 import { Hono } from 'hono';
 import { secureHeaders } from 'hono/secure-headers';
 import { z } from 'zod';
-import { countUntagged, enforcementPage, latestRuns, regulatoryPage } from '../db';
+import { TrackStatus } from '../items';
+import { countUntagged, enforcementPage, latestRuns, regulatoryPage, saveTracking, trackedItems, trackingFor } from '../db';
 import { readSecrets } from '../env';
 import { TAG_VERSION } from '../jev/questions';
 import { makeClient } from '../jev/tag';
@@ -20,7 +21,7 @@ import {
   toChangeRows,
   toEnforcementRows,
 } from './models';
-import { ChangesPage, EnforcementPage, LoginPage, SearchPage, SourcesPage } from './pages';
+import { AboutPage, ChangesPage, EnforcementPage, LoginPage, SearchPage, SourcesPage, TrackedPage } from './pages';
 
 export const app = new Hono<{ Bindings: Env }>();
 
@@ -58,7 +59,8 @@ app.get('/changes', async (c) => {
     limit: PAGE_SIZE,
     offset: (filters.page - 1) * PAGE_SIZE,
   });
-  return c.html(<ChangesPage rows={toChangeRows(result.rows)} matched={result.matched} filters={filters} />);
+  const tracking = await trackingFor(c.env.DB)(result.rows.map((r) => r.item.id));
+  return c.html(<ChangesPage rows={toChangeRows(result.rows)} matched={result.matched} filters={filters} tracking={tracking} />);
 });
 
 app.get('/enforcement', async (c) => {
@@ -74,16 +76,33 @@ app.get('/enforcement', async (c) => {
     offset: (filters.page - 1) * PAGE_SIZE,
   });
   const model = { groups: groupTable(result.groups), offences: offenceChips(result.offences), list: toEnforcementRows(result.rows), matched: result.matched };
-  return c.html(<EnforcementPage model={model} filters={filters} />);
+  const tracking = await trackingFor(c.env.DB)(result.rows.map((item) => item.id));
+  return c.html(<EnforcementPage model={model} filters={filters} tracking={tracking} />);
 });
 
 app.get('/search', async (c) => {
   const query = (c.req.query('q') ?? '').trim().slice(0, 300);
-  if (query === '') return c.html(<SearchPage query="" result={null} />);
+  if (query === '') return c.html(<SearchPage query="" result={null} tracking={new Map()} />);
   const result = await search({ db: c.env.DB, client: makeClient(readSecrets(c.env).TYPESAFE_API_KEY) })(query);
   console.log(JSON.stringify({ event: 'search', shortlist: result.shortlist, hits: result.hits.length, ms: result.ms, costUsd: result.costUsd }));
-  return c.html(<SearchPage query={query} result={result} />);
+  const tracking = await trackingFor(c.env.DB)(result.hits.map((hit) => hit.item.id));
+  return c.html(<SearchPage query={query} result={result} tracking={tracking} />);
 });
+
+app.get('/tracked', async (c) => c.html(<TrackedPage rows={await trackedItems(c.env.DB)()} />));
+
+// Saves the status and note of one item. "stop" removes the tracking.
+app.post('/track', async (c) => {
+  const form = z
+    .object({ itemId: z.string().min(1).max(500), status: TrackStatus, note: z.string().max(500).default(''), stop: z.literal('1').optional(), back: z.string().optional() })
+    .safeParse(await c.req.parseBody());
+  if (!form.success) return c.text('Bad request', 400);
+  const { itemId, status, note, stop, back } = form.data;
+  await saveTracking(c.env.DB)({ itemId, status: stop === '1' ? null : status, note: note.trim(), now: new Date() });
+  return c.redirect(safeNext(back));
+});
+
+app.get('/about', (c) => c.html(<AboutPage sources={SOURCES.length} />));
 
 app.get('/sources', async (c) => {
   const [runs, pending] = await Promise.all([latestRuns(c.env.DB)(), countUntagged(c.env.DB)(TAG_VERSION)]);
@@ -109,6 +128,15 @@ app.get('/sources', async (c) => {
 // Starts a run now, without a wait for the daily schedule.
 app.post('/sources/run', async (c) => {
   await scheduleAll(c.env);
+  return c.redirect('/sources');
+});
+
+// Loads the past 12 months from each source that can go back in time.
+// Items that are stored already do not get new tags.
+const BACKFILL_DAYS = 365;
+
+app.post('/sources/backfill', async (c) => {
+  await scheduleAll(c.env, new Date(Date.now() - BACKFILL_DAYS * 86_400_000).toISOString());
   return c.redirect('/sources');
 });
 

@@ -22,7 +22,8 @@ export type FetchOutcome =
     };
 
 // `page` is null for the first page, else the `next` value of the page before it.
-export type SourceContext = { cursor: string | null; now: Date; page: unknown };
+// `since` is an ISO date for a backfill run, else null. It replaces the cursor.
+export type SourceContext = { cursor: string | null; now: Date; page: unknown; since: string | null };
 
 export type Source = {
   id: string;
