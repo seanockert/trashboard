@@ -22,6 +22,10 @@
 			"0 19 * * *"
 		]
 	},
+	// Workers AI makes the card summaries. See src/summary.ts.
+	"ai": {
+		"binding": "AI"
+	},
 	"d1_databases": [
 		// TODO: replace with the ID from `wrangler d1 create trashboard` before deploy.
 		{

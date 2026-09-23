@@ -160,6 +160,25 @@ const Bookmark = ({ item, tracking, back }: { item: StoredItem; tracking: Tracki
 );
 
 // The status and note of a bookmarked item, at the bottom of the card.
+// The AI summary if there is one, else the start of the source text.
+const ItemText = ({ item }: { item: StoredItem }) => {
+  if (item.summary !== null)
+    return (
+      <div class="summary" title="AI summary of the source text. Check the source before you act.">
+        <p>{item.summary.what}</p>
+        {item.summary.points.length > 0 && (
+          <ul>
+            {item.summary.points.map((point) => (
+              <li>{point}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  const text = snippet(item);
+  return text === '' ? null : <div class="body">{text}</div>;
+};
+
 const TrackInfo = ({ tracking }: { tracking: Tracking | undefined }) =>
   tracking === undefined ? null : (
     <div class="track">
@@ -214,7 +233,7 @@ const ChangeCard = ({ row, filters, tracking }: { row: ChangeRow; filters: Chang
         <div>{ITEM_TYPE_LABELS[row.answers.itemType.choice] ?? row.answers.itemType.choice}</div>
       </div>
       <Title item={row.item} text={row.item.title} />
-      {snippet(row.item) !== '' && <div class="body">{snippet(row.item)}</div>}
+      <ItemText item={row.item} />
       <div class="tags">
         {row.answers.actionRequired.noul >= FLAG_MIN && <TagLink href={href('need', 'action')} on={filters.need === 'action'} warn text="Action may be needed" />}
         {row.answers.submissionsOpen.noul >= FLAG_MIN && <TagLink href={href('need', 'submissions')} on={filters.need === 'submissions'} warn text="Submissions invited" />}
@@ -273,7 +292,7 @@ const EnforcementCard = ({ row, filters, tracking }: { row: EnforcementRow; filt
       {row.item.penaltyAud !== null && <div>{aud(row.item.penaltyAud)}</div>}
     </div>
     <Title item={row.item} text={row.item.party ?? row.item.title} />
-    {row.item.body !== '' && <div class="body">{row.item.body}</div>}
+    <ItemText item={row.item} />
     <div class="tags">
       <TagLink
         href={query({ ...filters, page: undefined, offence: filters.offence === row.answers.offence.choice ? undefined : row.answers.offence.choice })}
@@ -389,7 +408,7 @@ export const SearchPage = ({ query, result, tracking }: { query: string; result:
                 <div>{hit.item.kind === 'enforcement' ? 'Enforcement' : 'Regulatory'}</div>
               </div>
               <Title item={hit.item} text={hit.item.party ?? hit.item.title} />
-              {snippet(hit.item) !== '' && <div class="body">{snippet(hit.item)}</div>}
+              <ItemText item={hit.item} />
               <TrackInfo tracking={tracking.get(hit.item.id)} />
             </div>
           ))
@@ -460,7 +479,7 @@ export const SourcesPage = ({ rows, pending }: { rows: SourceRow[]; pending: num
         <button type="submit">Load past 12 months</button>
       </form>
       <form method="post" action="/sources/retag">
-        <button type="submit">Tag waiting items</button>
+        <button type="submit">Tag and summarise waiting items</button>
       </form>
     </div>
     <div class="scroll">
@@ -541,6 +560,9 @@ export const AboutPage = ({ sources }: { sources: number }) => (
         <li>How much does it change your operations?</li>
       </ul>
       <p>Items that need action or invite submissions rank higher. Each card shows why, for example "High priority · About waste · Compliance change".</p>
+
+      <h2 id="summaries">Summaries</h2>
+      <p>An AI model writes the short summary on most cards: what changed, then key dates, amounts and who must act. Other cards show the start of the source text.</p>
 
       <h2 id="tags">Tags</h2>
       <ul>

@@ -34,6 +34,9 @@ button { background: var(--accent); color: var(--panel); border-color: var(--acc
 .card .title { display: block; font-size: 21px; font-weight: 650; line-height: 1.3; color: var(--text); text-decoration: none; margin: 6px 0 8px; }
 .card .title:hover { color: var(--accent); text-decoration: underline; }
 .card .body { font-size: 16px; color: var(--muted); white-space: pre-line; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.card .summary { font-size: 16px; }
+.card .summary p { margin: 0; }
+.card .summary ul { margin: 4px 0 0; padding-left: 20px; color: var(--muted); }
 .tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .tag { font-size: 14px; padding: 2px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
 .tag.warn { background: var(--warn-soft); color: var(--warn); }

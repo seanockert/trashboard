@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { Jurisdiction, TrackStatus, type NewItem, type StoredItem, type Tracking } from './items';
 import { findPartyGroup } from './parties';
 import { flagSql, IS_RELEVANT_SQL, IS_SERIOUS_SQL, IS_WASTE_OPERATOR_SQL, OFFENCE_SQL, PRIORITY_SQL, type FlagKey } from './rank';
+import { NEEDS_SUMMARY_SQL, Summary } from './summary';
 
 const sha256 = async (text: string) => {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
@@ -15,8 +16,8 @@ const enforcementFields = (item: NewItem) =>
     ? { party: item.party, partyGroup: findPartyGroup(item.party), action: item.action, location: item.location, penaltyAud: item.penaltyAud, wasteActivity: item.wasteActivity }
     : { party: null, partyGroup: null, action: null, location: null, penaltyAud: null, wasteActivity: false };
 
-// Inserts new items and updates changed ones. A changed item loses its tags,
-// thus the tag step reads the new text. Returns the IDs that need tags.
+// Inserts new items and updates changed ones. A changed item loses its tags
+// and its summary, thus the next steps read the new text. Returns the IDs that need tags.
 export const upsertItems =
   (db: D1Database) =>
   async ({ sourceId, items, now }: { sourceId: string; items: NewItem[]; now: Date }): Promise<string[]> => {
@@ -33,7 +34,8 @@ export const upsertItems =
              title = excluded.title, url = excluded.url, published_at = excluded.published_at, body = excluded.body,
              detail_url = excluded.detail_url, detail_fetched_at = NULL,
              party = excluded.party, party_group = excluded.party_group, action = excluded.action, location = excluded.location,
-             penalty_aud = excluded.penalty_aud, waste_activity = excluded.waste_activity, content_hash = excluded.content_hash, tag_version = NULL, tagged_at = NULL, answers = NULL
+             penalty_aud = excluded.penalty_aud, waste_activity = excluded.waste_activity, content_hash = excluded.content_hash, tag_version = NULL, tagged_at = NULL, answers = NULL,
+             summary = NULL, summary_version = NULL
            WHERE items.content_hash != excluded.content_hash
            RETURNING id`,
         )
@@ -84,6 +86,7 @@ const ItemRow = z.object({
   penalty_aud: z.number().nullable(),
   waste_activity: z.number(),
   answers: z.string().nullable(),
+  summary: z.string().nullable(),
 });
 
 const toStoredItem = (row: z.infer<typeof ItemRow>): StoredItem => ({
@@ -104,10 +107,11 @@ const toStoredItem = (row: z.infer<typeof ItemRow>): StoredItem => ({
   penaltyAud: row.penalty_aud,
   wasteActivity: row.waste_activity === 1,
   answers: row.answers === null ? null : JSON.parse(row.answers),
+  summary: row.summary === null ? null : (Summary.safeParse(JSON.parse(row.summary)).data ?? null),
 });
 
 const ITEM_COLUMNS =
-  'id, source_id, kind, jurisdiction, title, url, published_at, body, detail_url, detail_fetched_at, party, party_group, action, location, penalty_aud, waste_activity, answers';
+  'id, source_id, kind, jurisdiction, title, url, published_at, body, detail_url, detail_fetched_at, party, party_group, action, location, penalty_aud, waste_activity, answers, summary';
 
 const parseRows = (result: { results: unknown[] }) => z.array(ItemRow).parse(result.results).map(toStoredItem);
 
@@ -134,7 +138,32 @@ export const saveAnswers =
 export const saveDetail =
   (db: D1Database) =>
   async ({ itemId: id, body, now }: { itemId: string; body: string; now: Date }) => {
-    await db.prepare('UPDATE items SET body = ?1, detail_fetched_at = ?2 WHERE id = ?3').bind(body, now.toISOString(), id).run();
+    await db.prepare('UPDATE items SET body = ?1, detail_fetched_at = ?2, summary = NULL, summary_version = NULL WHERE id = ?3').bind(body, now.toISOString(), id).run();
+  };
+
+// A null summary stores the attempt, thus the daily run does not ask again
+// for an item that gives no usable answer. A new version asks again.
+export const saveSummary =
+  (db: D1Database) =>
+  async ({ itemId: id, summary, version }: { itemId: string; summary: Summary | null; version: number }) => {
+    await db
+      .prepare('UPDATE items SET summary = ?1, summary_version = ?2 WHERE id = ?3')
+      .bind(summary === null ? null : JSON.stringify(summary), version, id)
+      .run();
+  };
+
+// Items that the views show by default and that have no current summary.
+// `ids` limits the check to those items, for example the ones just tagged.
+export const unsummarisedIds =
+  (db: D1Database) =>
+  async ({ tagVersion, version, limit, ids }: { tagVersion: number; version: number; limit: number; ids?: string[] }) => {
+    if (ids?.length === 0) return [];
+    const only = ids === undefined ? '' : ` AND id IN (${ids.map((_, i) => `?${i + 4}`).join(', ')})`;
+    const result = await db
+      .prepare(`SELECT id FROM items WHERE tag_version = ?1 AND (summary_version IS NULL OR summary_version < ?2) AND ${NEEDS_SUMMARY_SQL}${only} LIMIT ?3`)
+      .bind(tagVersion, version, limit, ...(ids ?? []))
+      .all();
+    return z.array(z.object({ id: z.string() })).parse(result.results).map((row) => row.id);
   };
 
 // `seenBefore` skips items that a run in progress has sent to the queue already.

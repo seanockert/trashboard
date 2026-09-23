@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { Summary } from './summary';
 
 export const Jurisdiction = z.enum(['CTH', 'QLD', 'NSW', 'VIC', 'SA', 'WA', 'TAS', 'NT', 'ACT']);
 export type Jurisdiction = z.infer<typeof Jurisdiction>;
@@ -57,4 +58,5 @@ export type StoredItem = {
   penaltyAud: number | null;
   wasteActivity: boolean;
   answers: unknown;
+  summary: Summary | null;
 };

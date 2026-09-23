@@ -6,7 +6,7 @@ import { countUntagged, enforcementPage, latestRuns, regulatoryPage, saveTrackin
 import { readSecrets } from '../env';
 import { TAG_VERSION } from '../jev/questions';
 import { makeClient } from '../jev/tag';
-import { retagStale, scheduleAll } from '../pipeline';
+import { retagStale, scheduleAll, summariseStale } from '../pipeline';
 import { search } from '../search';
 import { SOURCES } from '../sources';
 import { checkPassword, endSession, requireSession, startSession } from './auth';
@@ -140,8 +140,9 @@ app.post('/sources/backfill', async (c) => {
   return c.redirect('/sources');
 });
 
-// Sends every item without current tags to the queue again.
+// Sends every item without current tags to the queue again, and the tagged
+// items that have no current summary. A new tag makes its summary too.
 app.post('/sources/retag', async (c) => {
-  await retagStale({ env: c.env, limit: 5000, minAgeHours: 0 });
+  await Promise.all([retagStale({ env: c.env, limit: 5000, minAgeHours: 0 }), summariseStale({ env: c.env, limit: 1000 })]);
   return c.redirect('/sources');
 });

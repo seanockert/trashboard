@@ -20,7 +20,9 @@ CREATE TABLE items (
   first_seen_at   TEXT NOT NULL,
   tag_version     INTEGER,                   -- NULL until Jev tags the item
   tagged_at       TEXT,
-  answers         TEXT                       -- JSON: raw Jev answers, keyed by question id
+  answers         TEXT,                      -- JSON: raw Jev answers, keyed by question id
+  summary         TEXT,                      -- JSON: AI card summary { what, points }. NULL until made or after a text change
+  summary_version INTEGER                    -- NULL until the summary step runs
 );
 
 CREATE INDEX items_kind_date ON items (kind, published_at DESC);

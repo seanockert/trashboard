@@ -3,10 +3,11 @@ import { match } from 'ts-pattern';
 import { readSecrets } from './env';
 import { BODY_MAX, NewItem, type StoredItem } from './items';
 import { isCompanyName } from './parties';
-import { deleteParties, getCursor, getItems, recordRun, saveAnswers, saveDetail, untaggedIds, upsertItems } from './db';
+import { deleteParties, getCursor, getItems, recordRun, saveAnswers, saveDetail, saveSummary, unsummarisedIds, untaggedIds, upsertItems } from './db';
 import { makeClient, tagItem, USD_PER_MILLION_INPUT_TOKENS } from './jev/tag';
 import { TAG_VERSION } from './jev/questions';
 import { SOURCES, sourceById } from './sources';
+import { summarise, SUMMARY_VERSION } from './summary';
 import { getText } from './sources/http';
 import type { SourceError } from './sources/types';
 
@@ -16,6 +17,8 @@ import type { SourceError } from './sources/types';
 // `since` starts a backfill from that date. Each page of the run carries it.
 export const IngestMessage = z.object({ sourceId: z.string(), page: z.unknown().default(null), since: z.string().nullable().default(null) });
 export const ItemMessage = z.object({ itemIds: z.array(z.string()).min(1), attempt: z.number().int().default(1) });
+// Items that were tagged before, but have no current summary. Uses the item queue too.
+export const SummaryMessage = z.object({ summariseIds: z.array(z.string()).min(1) });
 
 export const ITEMS_PER_MESSAGE = 10;
 export const MAX_ATTEMPTS = 5;
@@ -133,6 +136,44 @@ const withDetail = async ({ env, item, required }: { env: Env; item: StoredItem;
   return { ...item, body, detailFetchedAt: new Date().toISOString() };
 };
 
+// Makes summaries for the items that need one. A failed request does not
+// fail the message: the tags are saved already, and the daily run asks again.
+const summariseItems = async ({ env, items }: { env: Env; items: StoredItem[] }) => {
+  const ids = new Set(await unsummarisedIds(env.DB)({ tagVersion: TAG_VERSION, version: SUMMARY_VERSION, limit: items.length, ids: items.map((item) => item.id) }));
+  const todo = items.filter((item) => ids.has(item.id));
+  if (todo.length === 0) return;
+  const results = await Promise.allSettled(
+    todo.map(async (item) => {
+      const { summary, neurons } = await summarise({ ai: env.AI, item });
+      await saveSummary(env.DB)({ itemId: item.id, summary, version: SUMMARY_VERSION });
+      return { usable: summary !== null, neurons };
+    }),
+  );
+  results.forEach((result, i) => {
+    if (result.status === 'rejected') console.error(JSON.stringify({ event: 'summary_failed', itemId: todo[i]?.id, error: String(result.reason) }));
+  });
+  const done = results.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []));
+  console.log(
+    JSON.stringify({
+      event: 'summary_batch',
+      summarised: done.filter((d) => d.usable).length,
+      unusable: done.filter((d) => !d.usable).length,
+      failed: results.length - done.length,
+      neurons: done.reduce((sum, d) => sum + d.neurons, 0),
+    }),
+  );
+};
+
+export const summariseStale = async ({ env, limit }: { env: Env; limit: number }) => {
+  const ids = await unsummarisedIds(env.DB)({ tagVersion: TAG_VERSION, version: SUMMARY_VERSION, limit });
+  const messages = chunks(ids, ITEMS_PER_MESSAGE).map((group) => ({ body: { summariseIds: group } }));
+  await Promise.all(chunks(messages, 100).map((batch) => env.ITEM_QUEUE.sendBatch(batch)));
+  return ids.length;
+};
+
+export const handleSummaryMessage = async ({ env, message }: { env: Env; message: z.infer<typeof SummaryMessage> }) =>
+  summariseItems({ env, items: await getItems(env.DB)(message.summariseIds) });
+
 // Returns the IDs that failed.
 export const processItems = async ({ env, itemIds, detailRequired }: { env: Env; itemIds: string[]; detailRequired: boolean }) => {
   const client = makeClient(readSecrets(env).TYPESAFE_API_KEY);
@@ -148,6 +189,8 @@ export const processItems = async ({ env, itemIds, detailRequired }: { env: Env;
   const now = new Date();
   await Promise.all(results.flatMap((result) => (result.isOk() ? [saveAnswers(env.DB)({ ...result.value, version: TAG_VERSION, now })] : [])));
   const tagFailures = results.flatMap((result) => (result.isErr() ? [result.error] : []));
+  const failedIds = new Set(tagFailures.map((failure) => failure.itemId));
+  await summariseItems({ env, items: ready.filter((item) => !failedIds.has(item.id)) });
   tagFailures.forEach((failure) => console.error(JSON.stringify({ event: 'tag_failed', itemId: failure.itemId, error: String(failure.cause) })));
   const inputTokens = results.reduce((sum, result) => sum + (result.isOk() ? result.value.inputTokens : 0), 0);
   console.log(

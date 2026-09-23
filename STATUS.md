@@ -4,6 +4,7 @@ Trashboard is a private dashboard for the in-house legal counsel at JJ Richards 
 It collects public Australian regulatory and enforcement data every day.
 Jev (TypeSafe) tags each item one time, when it arrives.
 Code does the filters, the ranking, the dates and the company matches.
+Workers AI writes a short summary for each card that the views show by default.
 
 ## Rules for v1
 
@@ -23,7 +24,8 @@ Code does the filters, the ranking, the dates and the company matches.
 | Search (D1 full-text search, then Jev rerank) | Done |
 | Password login | Done |
 | Bookmarks (Watching or Acting, with a note) | Done |
-| Unit tests (parsers, company filter, dates, penalty selection) | Done, 56 tests |
+| Card summaries (Workers AI, Llama 3.1 8B) | Done. Not deployed |
+| Unit tests (parsers, company filter, dates, penalty selection, summary checks) | Done, 75 tests |
 | Fit the Workers Free plan (10 ms CPU, 50 subrequests for each invocation) | Done locally. Check real CPU time after deploy |
 | Deploy to Cloudflare (`trashboard.seanockert.workers.dev`) | Not started |
 | Labelled test set (about 100 items) to measure tag accuracy | Not started. Needs labels from the user |
@@ -65,11 +67,20 @@ The success criterion "90% of the top 20 are relevant" is not a good measure.
 In a quiet month there are fewer than 20 relevant items.
 A better measure is precision above a priority threshold, and recall on a labelled set.
 
+## Summaries
+
+- Model: `@cf/meta/llama-3.1-8b-instruct-fp8-fast`, JSON mode. About 6 neurons for each item. The free plan gives 10,000 neurons each day.
+- An item gets a summary right after its tags, if the view shows it by default and its source has prose text (news, laws, VIC court, SA prosecutions). QLD enforcement gives only fields, thus no summary.
+- The daily run sends up to 600 older items with no current summary. Increase `SUMMARY_VERSION` after a prompt change.
+- Code checks each answer. It drops a point with a number that is not in the text, a point copied from the prompt example, and a point that repeats the title.
+- Tested on 33 items (2026-09-23), rated by the user as better than the start of the text. Laws are the weakest, because the model sees only the first 4,000 characters.
+- A summary can still give a wrong date when that date is in the text for a different reason.
+
 ## Workers Free plan design
 
 - One ingest message is one page of one source. A page sends the next page as a new message. The cursor moves only after the last page.
 - QLD uses the CKAN datastore API in pages of 400 rows. A page ends at a reference boundary, thus no record holds only some of its rows.
-- One item message holds up to 10 items: 10 Jev requests and up to 10 detail pages. Only the failed items go back on the queue.
+- One item message holds up to 10 items: 10 Jev requests, up to 10 detail pages and up to 10 Workers AI requests. Only the failed items go back on the queue.
 - The views do the filters, the sort, the counts and the paging in D1 SQL over the stored answers (`json_extract`). The Worker parses only the 50 rows on the page. The ranking policy is in `src/rank.ts`.
 - Queue budget: 10,000 operations each day. A full new tag of all items uses about 700.
 - Measured locally in Bun (warm): the largest parse is the WA page at 5.5 ms. It is 17.5 ms on a cold start. Check the real CPU time in Workers Logs after deploy. If it is too high, split the WA page into one message for each table.
