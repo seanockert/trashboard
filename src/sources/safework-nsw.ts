@@ -1,7 +1,8 @@
-import { errAsync, okAsync, type ResultAsync } from 'neverthrow';
+import type { ResultAsync } from 'neverthrow';
 import { z } from 'zod';
-import { datesIn } from './dates';
-import { decodeEntities, htmlToText } from './html';
+import { badPageState, changed, parseError, unchanged, uniqueBy } from './common';
+import { datesIn, MONTHS, newestOf } from './dates';
+import { htmlToText, inlineText } from './html';
 import { getText } from './http';
 import type { FetchOutcome, Source, SourceError } from './types';
 
@@ -9,7 +10,6 @@ import type { FetchOutcome, Source, SourceError } from './types';
 // The month page addresses do not follow one pattern, thus the first page
 // reads them from the index. Each month page is then one invocation.
 const INDEX = 'https://www.safework.nsw.gov.au/compliance-and-prosecutions/prosecutions';
-const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
 // SafeWork publishes some months late and can add to a month page, thus a run reads again the months near the newest date seen.
 const REREAD_MONTHS = 2;
 
@@ -25,13 +25,13 @@ export const monthPages = (html: string): MonthPage[] => {
     const year = last.match(/(\d{4})/)?.[1] ?? url.match(/\/years\/(\d{4})/)?.[1];
     return month < 0 || year === undefined ? [] : [{ url, month: `${year}-${String(month + 1).padStart(2, '0')}` }];
   });
-  return pages.filter((page, i) => pages.findIndex((other) => other.url === page.url) === i).toSorted((a, b) => b.month.localeCompare(a.month));
+  return uniqueBy(pages, (page) => page.url).toSorted((a, b) => b.month.localeCompare(a.month));
 };
 
 // Each summary is `<div id="component_N"><h2>party</h2><h3>date</h3><p>...</p></div>`.
 export const parseMonthPage = ({ html, url }: { html: string; url: string }) =>
   [...html.matchAll(/<div id="component_(\d+)">\s*<h2>([\s\S]*?)<\/h2>\s*<h3>([\s\S]*?)<\/h3>([\s\S]*?)<\/div>/g)].map((m) => {
-    const party = decodeEntities((m[2] ?? '').replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
+    const party = inlineText(m[2] ?? '');
     return {
       kind: 'enforcement',
       externalId: m[1] ?? '',
@@ -59,33 +59,25 @@ const minusMonths = (month: string, count: number) => {
   return monthOf(date.toISOString());
 };
 
-const newestOf = (dates: (string | null)[]) => dates.filter((d): d is string => d !== null).sort().at(-1) ?? null;
-
 const fetchMonth = ({ state, cursor }: { state: Pages; cursor: string | null }): ResultAsync<FetchOutcome, SourceError> => {
   const page = state.pages[state.index];
-  if (page === undefined) return errAsync({ type: 'parse', url: INDEX, message: 'No month page at this index.' });
+  if (page === undefined) return parseError(INDEX, 'No month page at this index.');
   return getText({ url: page.url }).andThen(({ text }) => {
     const records = parseMonthPage({ html: text, url: page.url });
     const newest = newestOf([state.newest, ...records.map((r) => r.publishedAt)]);
     const isLast = state.index + 1 >= state.pages.length;
-    return okAsync<FetchOutcome, SourceError>({
-      type: 'changed',
-      records,
-      // The pipeline saves the cursor after the last page only.
-      cursor: newestOf([cursor, newest]),
-      raw: [{ name: `${page.month}.html`, body: text }],
-      next: isLast ? null : { ...state, index: state.index + 1, newest },
-    });
+    // The pipeline saves the cursor after the last page only.
+    return changed({ records, cursor: newestOf([cursor, newest]), next: isLast ? null : { ...state, index: state.index + 1, newest } });
   });
 };
 
 const fetchIndex = (cursor: string | null) =>
   getText({ url: INDEX }).andThen(({ text }) => {
     const all = monthPages(text);
-    if (all.length === 0) return errAsync<FetchOutcome, SourceError>({ type: 'parse', url: INDEX, message: 'The index has no month pages.' });
+    if (all.length === 0) return parseError(INDEX, 'The index has no month pages.');
     const from = cursor === null ? null : minusMonths(monthOf(cursor), REREAD_MONTHS);
     const pages = from === null ? all : all.filter((page) => page.month >= from);
-    if (pages.length === 0) return okAsync<FetchOutcome, SourceError>({ type: 'unchanged' });
+    if (pages.length === 0) return unchanged();
     return fetchMonth({ state: { pages, index: 0, newest: null }, cursor });
   });
 
@@ -98,6 +90,6 @@ export const safeworkNsw: Source = {
   run: ({ cursor, page }) => {
     if (page === null) return fetchIndex(cursor);
     const state = Pages.safeParse(page);
-    return state.success ? fetchMonth({ state: state.data, cursor }) : errAsync({ type: 'parse', url: INDEX, message: 'The page state is not valid.' });
+    return state.success ? fetchMonth({ state: state.data, cursor }) : badPageState(INDEX);
   },
 };

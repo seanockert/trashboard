@@ -1,14 +1,14 @@
-import { errAsync, okAsync, type ResultAsync } from 'neverthrow';
+import type { ResultAsync } from 'neverthrow';
 import { z } from 'zod';
-import { between, htmlToText } from './html';
+import { isCompanyName } from '../parties';
+import { badPageState, changed, parseError, text } from './common';
+import { htmlToText, mainText } from './html';
 import { getJson, getText, postJson } from './http';
 import type { FetchOutcome, Source, SourceError } from './types';
 
 // Public consultations. Each one is a regulatory item. The close date is
 // free text on these sites, thus the body starts with the text that holds
 // the dates, and Jev selects the close date as for other items.
-
-const parseError = (url: string, message: string) => errAsync<FetchOutcome, SourceError>({ type: 'parse', url, message: message.slice(0, 500) });
 
 // NSW EPA Your Say. The list of open projects is the JSON that the "load
 // more" button of the site gets. It is not a documented API. 8457 is the ID
@@ -17,7 +17,6 @@ const parseError = (url: string, message: string) => errAsync<FetchOutcome, Sour
 const NSW_SITE = 'https://yoursay.epa.nsw.gov.au';
 const NSW_OPEN_LIST = `${NSW_SITE}/ccm/the_hive_projects/tools/the_hive_projects_list/load_more/8457?page=1`;
 
-const text = z.string().nullish().transform((value) => (value ?? '').trim());
 const NswProject = z.object({ projectID: z.number(), projectName: z.string().min(1), projectDescription: text, projectPath: z.url(), projectDateNum: text });
 type NswProject = z.infer<typeof NswProject>;
 const NswList = z.object({ result: z.array(NswProject) });
@@ -34,27 +33,19 @@ export const nswProjectRecord = (p: NswProject) => ({
   detailUrl: p.projectPath,
 });
 
-// The main part of a project page. It holds the "Have your say" text with the close date.
-export const extractNswProject = (html: string) => htmlToText(between({ html, start: /<main[\s>]/i, end: /<\/main>/i }));
-
 export const nswEpaYourSay: Source = {
   id: 'nsw-epa-yoursay',
   name: 'NSW EPA Your Say consultations',
   kind: 'regulatory',
   jurisdiction: 'NSW',
   homepage: NSW_SITE,
-  extractDetail: extractNswProject,
+  // The main part of a project page holds the "Have your say" text with the close date.
+  extractDetail: mainText,
   run: () =>
-    getJson({ url: NSW_OPEN_LIST }).andThen(({ json, text: body }) => {
+    getJson({ url: NSW_OPEN_LIST }).andThen(({ json }) => {
       const parsed = NswList.safeParse(json);
       if (!parsed.success) return parseError(NSW_OPEN_LIST, parsed.error.message);
-      return okAsync<FetchOutcome, SourceError>({
-        type: 'changed',
-        records: parsed.data.result.map(nswProjectRecord),
-        cursor: null,
-        raw: [{ name: 'open.json', body }],
-        next: null,
-      });
+      return changed({ records: parsed.data.result.map(nswProjectRecord) });
     }),
 };
 
@@ -98,6 +89,15 @@ export const vicProjectRecord = (p: VicProject) => ({
     .join('\n'),
 });
 
+// A licence application has the applicant and the application number in the
+// title, for example "Example Composting Pty Ltd (APP051292)". The applicant of
+// a site near the user is useful. An application that names a person is not
+// kept, as for enforcement records.
+export const namesPerson = (p: VicProject) => {
+  const applicant = p.title.match(/^(.+?)\s*\(APP\d+\)\s*$/)?.[1];
+  return applicant !== undefined && !isCompanyName(applicant);
+};
+
 // The version is in the JSON of the `data-page` attribute, with HTML entities.
 export const inertiaVersion = (html: string) => html.match(/&quot;version&quot;:&quot;([0-9a-f]+)&quot;/)?.[1] ?? null;
 
@@ -106,18 +106,12 @@ type VicState = z.infer<typeof VicState>;
 
 const fetchVicPage = (state: VicState): ResultAsync<FetchOutcome, SourceError> => {
   const url = `${VIC_SITE}/project?${new URLSearchParams({ page: String(state.page), 'filter[status]': 'open' })}`;
-  return getJson({ url, headers: { 'x-inertia': 'true', 'x-inertia-version': state.version, 'x-requested-with': 'XMLHttpRequest' } }).andThen(({ json, text: body }) => {
+  return getJson({ url, headers: { 'x-inertia': 'true', 'x-inertia-version': state.version, 'x-requested-with': 'XMLHttpRequest' } }).andThen(({ json }) => {
     const parsed = VicPage.safeParse(json);
     if (!parsed.success) return parseError(url, parsed.error.message);
     const { current_page, last_page, data } = parsed.data.props.meta;
     const isLast = current_page >= last_page || current_page >= VIC_MAX_PAGES;
-    return okAsync<FetchOutcome, SourceError>({
-      type: 'changed',
-      records: data.map(vicProjectRecord),
-      cursor: null,
-      raw: [{ name: `open-${state.page}.json`, body }],
-      next: isLast ? null : { ...state, page: state.page + 1 },
-    });
+    return changed({ records: data.filter((p) => !namesPerson(p)).map(vicProjectRecord), next: isLast ? null : { ...state, page: state.page + 1 } });
   });
 };
 
@@ -130,7 +124,7 @@ export const engageVic: Source = {
   run: ({ page }) => {
     if (page !== null) {
       const state = VicState.safeParse(page);
-      return state.success ? fetchVicPage(state.data) : parseError(VIC_SITE, 'The page state is not valid.');
+      return state.success ? fetchVicPage(state.data) : badPageState(VIC_SITE);
     }
     return getText({ url: VIC_SITE }).andThen(({ text: html }) => {
       const version = inertiaVersion(html);
@@ -141,7 +135,7 @@ export const engageVic: Source = {
 
 // The day in Sydney of an ISO time, in words, for example "23 October 2026".
 // The date step reads dates in words, as on the other consultation sites.
-export const sydneyDay = (isoTime: string) =>
+const sydneyDay = (isoTime: string) =>
   new Date(isoTime).toLocaleDateString('en-AU', { timeZone: 'Australia/Sydney', day: 'numeric', month: 'long', year: 'numeric' });
 
 // DCCEEW (Commonwealth). The consultation hub is a Converlens site. This is
@@ -181,10 +175,10 @@ export const dcceewConsultations: Source = {
   homepage: CTH_SITE,
   run: () => {
     const request = { org_id: CTH_ORG, labels: [], status: 'open', limit: 100, page: 1, sort: '-ends' };
-    return postJson({ url: CTH_API, body: request }).andThen(({ json, text: body }) => {
+    return postJson({ url: CTH_API, body: request }).andThen(({ json }) => {
       const parsed = CthPage.safeParse(json);
       if (!parsed.success) return parseError(CTH_API, parsed.error.message);
-      return okAsync<FetchOutcome, SourceError>({ type: 'changed', records: parsed.data.data.map(cthProjectRecord), cursor: null, raw: [{ name: 'open.json', body }], next: null });
+      return changed({ records: parsed.data.data.map(cthProjectRecord) });
     });
   },
 };
@@ -228,9 +222,9 @@ export const dwerConsultations: Source = {
   jurisdiction: 'WA',
   homepage: WA_SITE,
   run: () =>
-    getJson({ url: WA_API }).andThen(({ json, text: body }) => {
+    getJson({ url: WA_API }).andThen(({ json }) => {
       const parsed = z.array(WaConsultation).safeParse(json);
       if (!parsed.success) return parseError(WA_API, parsed.error.message);
-      return okAsync<FetchOutcome, SourceError>({ type: 'changed', records: parsed.data.map(waConsultationRecord), cursor: null, raw: [{ name: 'all.json', body }], next: null });
+      return changed({ records: parsed.data.map(waConsultationRecord) });
     }),
 };

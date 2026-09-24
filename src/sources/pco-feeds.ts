@@ -1,7 +1,8 @@
-import { errAsync, okAsync, ResultAsync } from 'neverthrow';
+import { ResultAsync } from 'neverthrow';
 import { z } from 'zod';
 import type { Jurisdiction } from '../items';
 import { readAtom, type AtomEntry } from './atom';
+import { changed, parseError, uniqueBy } from './common';
 import { between, htmlToText } from './html';
 import { getJson, getText } from './http';
 import type { FetchOutcome, Source, SourceError } from './types';
@@ -25,12 +26,12 @@ const itemsOf = ({ entries, feed, jurisdiction, textUrl }: { entries: AtomEntry[
   }));
 
 // A feed can list one law more than one time in a week.
-const firstOfEachId = <T extends { externalId: string }>(records: T[]) => records.filter((r, i) => records.findIndex((o) => o.externalId === r.externalId) === i);
+const firstOfEachId = <T extends { externalId: string }>(records: T[]) => uniqueBy(records, (r) => r.externalId);
 
 // Feeds are read one after another. The NSW server limits fast requests.
 const readFeeds = ({ base, feeds }: { base: string; feeds: FeedSpec[] }) =>
-  feeds.reduce<ResultAsync<{ feed: FeedSpec; entries: AtomEntry[]; xml: string }[], SourceError>>(
-    (done, feed) => done.andThen((acc) => getText({ url: `${base}/feed?id=${feed.id}` }).map(({ text }) => [...acc, { feed, entries: readAtom(text), xml: text }])),
+  feeds.reduce<ResultAsync<{ feed: FeedSpec; entries: AtomEntry[] }[], SourceError>>(
+    (done, feed) => done.andThen((acc) => getText({ url: `${base}/feed?id=${feed.id}` }).map(({ text }) => [...acc, { feed, entries: readAtom(text) }])),
     ResultAsync.fromSafePromise(Promise.resolve([])),
   );
 
@@ -58,7 +59,7 @@ const DalPage = z.object({
 export const dalExpression = ({ printTypes, since }: { printTypes: string[]; since: string }) =>
   `PrintType=(${printTypes.map((t) => `"${t}"`).join(' OR ')}) AND PublicationDate>=${since.slice(0, 10).replace(/-/g, '')}000000`;
 
-export const dalEntries = ({ json, backfill }: { json: unknown; backfill: Backfill }) => {
+const dalEntries = ({ json, backfill }: { json: unknown; backfill: Backfill }) => {
   const parsed = DalPage.safeParse(json);
   if (!parsed.success) return null;
   return { total: parsed.data.totalCount.__value__, entries: parsed.data.data.map(backfill.toEntry) };
@@ -89,16 +90,13 @@ const backfillPage = ({
     sortDirection: 'asc',
   });
   const url = `${base}/projectdata?${params}`;
-  return getJson({ url }).andThen(({ json, text }) => {
+  return getJson({ url }).andThen(({ json }) => {
     const page = dalEntries({ json, backfill });
-    if (page === null) return errAsync<FetchOutcome, SourceError>({ type: 'parse', url, message: 'The query response is not in the expected form.' });
+    if (page === null) return parseError(url, 'The query response is not in the expected form.');
     const next = start + DAL_PAGE_SIZE;
-    return okAsync<FetchOutcome, SourceError>({
-      type: 'changed',
+    return changed({
       records: firstOfEachId(page.entries.flatMap(({ feed, entry }) => itemsOf({ entries: [entry], feed, jurisdiction, textUrl }))),
-      cursor: null,
       next: next > page.total ? null : next,
-      raw: [{ name: `projectdata-${start}.json`, body: text }],
     });
   });
 };
@@ -110,7 +108,7 @@ const dalEntry = ({ record, link }: { record: DalRecord; link: string }): AtomEn
   updated: record['publication.date'].slice(0, 10),
 });
 
-export const pcoSource = ({
+const pcoSource = ({
   id,
   name,
   jurisdiction,
@@ -137,13 +135,7 @@ export const pcoSource = ({
     if (since !== null && backfill !== null) {
       return backfillPage({ base, backfill, since, start: z.number().catch(1).parse(page ?? 1), jurisdiction, textUrl });
     }
-    return readFeeds({ base, feeds }).map((results) => ({
-      type: 'changed' as const,
-      records: firstOfEachId(results.flatMap(({ feed, entries }) => itemsOf({ entries, feed, jurisdiction, textUrl }))),
-      cursor: null,
-      next: null,
-      raw: results.map(({ feed, xml }) => ({ name: `${feed.id}.xml`, body: xml })),
-    }));
+    return readFeeds({ base, feeds }).andThen((results) => changed({ records: firstOfEachId(results.flatMap(({ feed, entries }) => itemsOf({ entries, feed, jurisdiction, textUrl }))) }));
   },
 });
 

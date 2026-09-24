@@ -1,7 +1,7 @@
-import { errAsync, okAsync } from 'neverthrow';
 import { z } from 'zod';
+import { badPageState, changed, lines, parseError, text, unchanged } from './common';
 import { getJson } from './http';
-import type { FetchOutcome, Source, SourceError } from './types';
+import type { Source } from './types';
 
 const API = 'https://www.data.qld.gov.au/api/3/action';
 const PACKAGE = `${API}/package_show?id=enforcement-actions-register`;
@@ -18,7 +18,6 @@ const Package = z.object({
   }),
 });
 
-const text = z.string().nullable().transform((value) => (value ?? '').trim());
 const Row = z.object({
   'Enforcement Reference': text,
   'Enforcement Type': text,
@@ -51,13 +50,6 @@ const toRecord = ([reference, rows]: [string, Row[]]) => {
   const dates = unique(rows.map((r) => r['Issued Date'].slice(0, 10))).sort();
   const party = unique(rows.map((r) => r['Issued To'])).join('; ');
   const activities = unique(rows.map((r) => r.Activities)).join('; ');
-  const lines = [
-    ['Enforcement type', types.join('; ')],
-    ['Status', unique(rows.map((r) => r.Status)).join('; ')],
-    ['Activities', activities],
-    ['Related environmental authority', unique(rows.map((r) => r['Related Environmental Authority'])).join('; ')],
-    ['Subsequent action', unique(rows.map((r) => r['Subsequent Action'])).join('; ')],
-  ].filter(([, value]) => value !== '');
   return {
     kind: 'enforcement',
     externalId: reference,
@@ -65,7 +57,13 @@ const toRecord = ([reference, rows]: [string, Row[]]) => {
     title: `${types.join(', ') || 'Enforcement action'}: ${party}`,
     url: `${DATASET_PAGE}#${encodeURIComponent(reference)}`,
     publishedAt: dates[0] ?? null,
-    body: lines.map(([name, value]) => `${name}: ${value}`).join('\n'),
+    body: lines([
+      ['Enforcement type', types.join('; ')],
+      ['Status', unique(rows.map((r) => r.Status)).join('; ')],
+      ['Activities', activities],
+      ['Related environmental authority', unique(rows.map((r) => r['Related Environmental Authority'])).join('; ')],
+      ['Subsequent action', unique(rows.map((r) => r['Subsequent Action'])).join('; ')],
+    ]),
     party,
     action: types.join('; ') || 'Enforcement action',
     location: unique(rows.map((r) => r.Locations)).join('; ') || null,
@@ -95,17 +93,11 @@ const fetchPage = (page: Page) => {
     sort: '"Enforcement Reference" asc, _id asc',
   });
   const url = `${API}/datastore_search?${params}`;
-  return getJson({ url }).andThen(({ json, text: body }) => {
+  return getJson({ url }).andThen(({ json }) => {
     const parsed = Search.safeParse(json);
-    if (!parsed.success) return errAsync<FetchOutcome, SourceError>({ type: 'parse', url, message: parsed.error.message });
+    if (!parsed.success) return parseError(url, parsed.error.message);
     const { rows, nextOffset } = splitPage({ rows: parsed.data.result.records, offset: page.offset, total: parsed.data.result.total });
-    return okAsync<FetchOutcome, SourceError>({
-      type: 'changed',
-      records: recordsFromRows(rows),
-      cursor: page.cursor,
-      raw: [{ name: `page-${page.offset}.json`, body }],
-      next: nextOffset === null ? null : { ...page, offset: nextOffset },
-    });
+    return changed({ records: recordsFromRows(rows), cursor: page.cursor, next: nextOffset === null ? null : { ...page, offset: nextOffset } });
   });
 };
 
@@ -113,9 +105,10 @@ const fetchPage = (page: Page) => {
 const firstPage = (cursor: string | null) =>
   getJson({ url: PACKAGE }).andThen(({ json }) => {
     const parsed = Package.safeParse(json);
-    const resource = parsed.success ? parsed.data.result.resources.find((r) => r.datastore_active === true) : undefined;
-    if (resource === undefined) return errAsync<FetchOutcome, SourceError>({ type: 'parse', url: PACKAGE, message: 'No resource with an active datastore.' });
-    if (resource.last_modified !== null && resource.last_modified === cursor) return okAsync<FetchOutcome, SourceError>({ type: 'unchanged' });
+    if (!parsed.success) return parseError(PACKAGE, parsed.error.message);
+    const resource = parsed.data.result.resources.find((r) => r.datastore_active === true);
+    if (resource === undefined) return parseError(PACKAGE, 'No resource with an active datastore.');
+    if (resource.last_modified !== null && resource.last_modified === cursor) return unchanged();
     return fetchPage({ resourceId: resource.id, offset: 0, cursor: resource.last_modified });
   });
 
@@ -128,6 +121,6 @@ export const qldEnforcement: Source = {
   run: ({ cursor, page }) => {
     if (page === null) return firstPage(cursor);
     const parsed = Page.safeParse(page);
-    return parsed.success ? fetchPage(parsed.data) : errAsync({ type: 'parse', url: PACKAGE, message: 'The page state is not valid.' });
+    return parsed.success ? fetchPage(parsed.data) : badPageState(PACKAGE);
   },
 };

@@ -44,7 +44,7 @@ const enforcementState = (item: StoredItem) => ({
 type Asked = Omit<Tagged, 'itemId'>;
 
 const askEnforcement = async ({ client, item }: { client: TypeSafeClient; item: StoredItem }): Promise<Asked> => {
-  const candidates = item.penaltyAud === null ? penaltyCandidates(item.body) : [];
+  const candidates = item.penaltySourceAud === null ? penaltyCandidates(item.body) : [];
   const state = enforcementState(item);
   if (candidates.length === 0) {
     const res = await client.systemOne({ state, questions: ENFORCEMENT_QUESTIONS });

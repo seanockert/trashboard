@@ -17,11 +17,11 @@ const common = {
   externalId: z.string().min(1),
   jurisdiction: Jurisdiction,
   title: z.string().min(1),
-  url: z.url(),
+  url: z.url({ protocol: /^https?$/ }),
   publishedAt: z.iso.date().nullable(),
   body: z.string().transform((text) => text.slice(0, BODY_MAX)),
   // A page with the full text. The pipeline fetches it before Jev tags the item.
-  detailUrl: z.url().nullable().default(null),
+  detailUrl: z.url({ protocol: /^https?$/ }).nullable().default(null),
 };
 
 // What a source adapter gives back for each record.
@@ -55,7 +55,10 @@ export type StoredItem = {
   partyGroup: string | null;
   action: string | null;
   location: string | null;
+  // The shown penalty: the source amount, else the amount that Jev selected.
   penaltyAud: number | null;
+  penaltySourceAud: number | null;
+  contentHash: string;
   wasteActivity: boolean;
   answers: unknown;
   summary: Summary | null;

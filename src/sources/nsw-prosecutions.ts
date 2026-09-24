@@ -1,7 +1,8 @@
-import { errAsync, okAsync } from 'neverthrow';
 import { z } from 'zod';
-import { postJson } from './http';
-import type { FetchOutcome, Source, SourceError } from './types';
+import { badPageState, changed, parseError, text } from './common';
+import { daysBefore, newestOf } from './dates';
+import { BROWSER_USER_AGENT, postJson } from './http';
+import type { Source } from './types';
 
 // The NSW EPA register of prosecutions. The site is a Salesforce page, and
 // this is the Apex call that its search form makes. It is not a documented
@@ -15,12 +16,8 @@ const CLASS_ID = '@udd/01p7F00000WT3G8';
 // companies, thus each page searches for one word of a company name. The full
 // register in one response is 1.9 MB, too large for the CPU limit.
 // A matter can be on more than one page. It has the same ID on each.
-export const NAME_WORDS = ['pty', 'ltd', 'limited', 'council', 'corporation', 'authority'] as const;
+const NAME_WORDS = ['pty', 'ltd', 'limited', 'council', 'corporation', 'authority'] as const;
 
-// The CloudFront and Salesforce front end refuses requests without a browser user agent.
-const HEADERS = { 'user-agent': 'Mozilla/5.0 (compatible; Trashboard/0.1)' };
-
-const text = z.string().nullish().transform((value) => (value ?? '').trim());
 const Charge = z.object({
   Charge_Description__c: text,
   Act_Regulation__c: text,
@@ -33,7 +30,7 @@ const Charge = z.object({
 });
 const Matter = z.object({ matterId: z.string().min(1), defendent: z.string(), dateOfCourtSentence: z.string().nullish(), matterRecs: z.array(Charge) });
 type Matter = z.infer<typeof Matter>;
-const Response = z.object({ returnValue: z.array(Matter) });
+const SearchResponse = z.object({ returnValue: z.array(Matter) });
 
 const aud = (n: number) => `$${n.toLocaleString('en-AU')}`;
 
@@ -78,20 +75,17 @@ const REREAD_DAYS = 365;
 const PageState = z.object({ index: z.number().int().min(0), offset: z.number().int().min(0), newest: z.string().nullable() });
 type PageState = z.infer<typeof PageState>;
 
-const daysBefore = (isoDate: string, days: number) => new Date(Date.parse(`${isoDate}T00:00:00Z`) - days * 86_400_000).toISOString().slice(0, 10);
-
-const newestOf = (dates: (string | null | undefined)[]) => dates.filter((d): d is string => typeof d === 'string' && d !== '').sort().at(-1) ?? null;
-
 const fetchPage = ({ state, cursor }: { state: PageState; cursor: string | null }) => {
   const word = NAME_WORDS[state.index];
-  if (word === undefined) return errAsync<FetchOutcome, SourceError>({ type: 'parse', url: API, message: `No search word for page ${state.index}.` });
+  if (word === undefined) return parseError(API, `No search word for page ${state.index}.`);
   const body = { namespace: '', classname: CLASS_ID, method: 'searchRecords', isContinuation: false, params: { matterType: 'Prosecution', defendant: word }, cacheable: false };
-  return postJson({ url: API, body, headers: HEADERS }).andThen(({ json, text: raw }) => {
-    const parsed = Response.safeParse(json);
-    if (!parsed.success) return errAsync<FetchOutcome, SourceError>({ type: 'parse', url: API, message: parsed.error.message.slice(0, 500) });
+  return postJson({ url: API, body, headers: { 'user-agent': BROWSER_USER_AGENT } }).andThen(({ json }) => {
+    const parsed = SearchResponse.safeParse(json);
+    if (!parsed.success) return parseError(API, parsed.error.message);
     const from = cursor === null ? null : daysBefore(cursor, REREAD_DAYS);
+    // A matter with no sentence date stays, because code cannot place it.
     const matters = parsed.data.returnValue
-      .filter((m) => from === null || (m.dateOfCourtSentence ?? '') >= from)
+      .filter((m) => from === null || m.dateOfCourtSentence == null || m.dateOfCourtSentence >= from)
       .toSorted((a, b) => a.matterId.localeCompare(b.matterId));
     const chunk = matters.slice(state.offset, state.offset + CHUNK);
     const newest = newestOf([state.newest, ...chunk.map((m) => m.dateOfCourtSentence?.slice(0, 10))]);
@@ -101,14 +95,7 @@ const fetchPage = ({ state, cursor }: { state: PageState; cursor: string | null 
       : state.index + 1 < NAME_WORDS.length
         ? { index: state.index + 1, offset: 0, newest }
         : null;
-    return okAsync<FetchOutcome, SourceError>({
-      type: 'changed',
-      records: chunk.map(toRecord),
-      cursor: newestOf([cursor, newest]),
-      // The same response serves each chunk of a word. Keep it one time.
-      raw: state.offset === 0 ? [{ name: `${word}.json`, body: raw }] : [],
-      next,
-    });
+    return changed({ records: chunk.map(toRecord), cursor: newestOf([cursor, newest]), next });
   });
 };
 
@@ -121,6 +108,6 @@ export const nswProsecutions: Source = {
   run: ({ cursor, page }) => {
     if (page === null) return fetchPage({ state: { index: 0, offset: 0, newest: null }, cursor });
     const parsed = PageState.safeParse(page);
-    return parsed.success ? fetchPage({ state: parsed.data, cursor }) : errAsync({ type: 'parse', url: API, message: 'The page state is not valid.' });
+    return parsed.success ? fetchPage({ state: parsed.data, cursor }) : badPageState(API);
   },
 };

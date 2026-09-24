@@ -14,15 +14,13 @@ export type FetchOutcome =
       records: unknown[];
       // Saved after the last page only. A run that stops halfway starts again from the old cursor.
       cursor: string | null;
-      // Files to keep in R2, keyed by a name that is unique for the source.
-      raw: { name: string; body: string | Uint8Array }[];
       // The next page, as JSON. The pipeline sends it in a new queue message, because
       // each invocation on the Workers Free plan has 10 ms of CPU and 50 subrequests.
       next: unknown;
     };
 
 // `page` is null for the first page, else the `next` value of the page before it.
-// `since` is an ISO date for a backfill run, else null. It replaces the cursor.
+// `since` is an ISO date for a backfill run, else null. A source that supports a backfill uses it in place of the cursor.
 export type SourceContext = { cursor: string | null; now: Date; page: unknown; since: string | null };
 
 export type Source = {

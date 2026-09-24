@@ -1,9 +1,9 @@
-import { ResultAsync } from 'neverthrow';
-import { datesIn } from './dates';
-import { getText } from './http';
+import { changed, tryParse } from './common';
+import { firstDate } from './dates';
+import { BROWSER_USER_AGENT, getText } from './http';
 import { slug, withUniqueIds } from './ids';
 import { readTables } from './table';
-import type { Source, SourceError } from './types';
+import type { Source } from './types';
 
 const PAGE = 'https://www.epa.sa.gov.au/public_register/completed_prosecutions_and_civil_penalties';
 
@@ -16,7 +16,7 @@ const toRecord = ([offender = '', incident = '', outcome = '']: string[]) => {
     title: `${civil ? 'Civil penalty' : 'Prosecution'}: ${offender}`,
     url: PAGE,
     // The outcome text starts with the date of the court order or penalty.
-    publishedAt: datesIn(outcome)[0] ?? null,
+    publishedAt: firstDate(outcome),
     body: `Incident: ${incident}\nOutcome: ${outcome}`,
     party: offender,
     action: civil ? 'Civil penalty' : 'Prosecution',
@@ -39,11 +39,7 @@ export const saProsecutions: Source = {
   jurisdiction: 'SA',
   homepage: PAGE,
   run: () =>
-    // CloudFront in front of the SA EPA site refuses requests without a browser user agent.
-    getText({ url: PAGE, headers: { 'user-agent': 'Mozilla/5.0 (compatible; Trashboard/0.1)' } }).andThen(({ text }) =>
-      ResultAsync.fromPromise(
-        Promise.resolve().then(() => parseSaPage(text)),
-        (cause): SourceError => ({ type: 'parse', url: PAGE, message: String(cause) }),
-      ).map((records) => ({ type: 'changed' as const, records, cursor: null, next: null, raw: [{ name: 'prosecutions.html', body: text }] })),
-    ),
+    getText({ url: PAGE, headers: { 'user-agent': BROWSER_USER_AGENT } })
+      .andThen(({ text }) => tryParse(PAGE, () => parseSaPage(text)))
+      .andThen((records) => changed({ records })),
 };

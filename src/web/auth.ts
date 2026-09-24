@@ -5,6 +5,9 @@ import { readSecrets } from '../env';
 const COOKIE = 'trashboard_session';
 const SESSION_DAYS = 30;
 
+// Only a local path is a safe place to send the user after login. A browser reads "/\" as "//", which is another site.
+export const safeNext = (next: unknown) => (typeof next === 'string' && /^\/(?![/\\])/.test(next) ? next : '/changes');
+
 const encoder = new TextEncoder();
 
 // Compares the digests, not the strings, so the time taken does not depend on
@@ -39,7 +42,9 @@ export const requireSession: MiddlewareHandler<{ Bindings: Env }> = async (c, ne
   const value = await getSignedCookie(c, readSecrets(c.env).SESSION_SECRET, COOKIE);
   const expires = typeof value === 'string' ? Number(value) : Number.NaN;
   if (!Number.isFinite(expires) || expires < Date.now()) {
-    return c.redirect(`/login?next=${encodeURIComponent(c.req.path)}`);
+    // A form post cannot repeat after login, thus it goes to the default page.
+    const next = c.req.method === 'GET' ? `${c.req.path}${new URL(c.req.url).search}` : '/changes';
+    return c.redirect(`/login?next=${encodeURIComponent(next)}`);
   }
   await next();
 };

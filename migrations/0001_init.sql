@@ -11,10 +11,13 @@ CREATE TABLE items (
   detail_url      TEXT,                      -- a page with the full text, fetched after insert
   detail_fetched_at TEXT,
   party           TEXT,                      -- enforcement: the company named in the record
-  party_group     TEXT,                      -- enforcement: known group from the alias list, else NULL
+  party_group     TEXT,                      -- known group from the alias list, else NULL. Enforcement: the party. Regulatory: a group that the text names
+  group_version   INTEGER,                   -- the alias list version that gave party_group
   action          TEXT,                      -- enforcement: penalty notice, prosecution, order and so on
   location        TEXT,                      -- enforcement: site or suburb
-  penalty_aud     REAL,
+  penalty_source_aud   REAL,                 -- enforcement: the amount that the source columns state
+  penalty_selected_aud REAL,                 -- enforcement: the amount that Jev selected from the text. NULL until tags or after a text change
+  penalty_aud     REAL GENERATED ALWAYS AS (COALESCE(penalty_source_aud, penalty_selected_aud)) VIRTUAL,
   waste_activity  INTEGER NOT NULL DEFAULT 0, -- enforcement: the source states a waste activity
   content_hash    TEXT NOT NULL,
   first_seen_at   TEXT NOT NULL,

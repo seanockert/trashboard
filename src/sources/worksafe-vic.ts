@@ -1,5 +1,6 @@
-import { errAsync, okAsync, type ResultAsync } from 'neverthrow';
+import type { ResultAsync } from 'neverthrow';
 import { z } from 'zod';
+import { badPageState, changed, newestFirstPage, parseError, unchanged } from './common';
 import { htmlToText } from './html';
 import { getJson } from './http';
 import type { FetchOutcome, Source, SourceError } from './types';
@@ -11,21 +12,22 @@ const SITE = 'https://www.worksafe.vic.gov.au';
 const REGISTER_PAGE = `${SITE}/prosecution-result-summaries-enforceable-undertakings`;
 // A record is about 16 KB of JSON, thus a page of 20 is about 320 KB.
 const PAGE_ROWS = 20;
-const MAX_PAGES = 100;
+// A first run reads the full register, about 1,900 outcomes in 2026.
+const MAX_PAGES = 200;
 
-const Record = z.object({
+const PrsRecord = z.object({
   record_id: z.number(),
   record_title: z.string(),
   record_outcome: z.string().nullish(),
   record_prs_dateoutcome: z.number().nullish(),
   data: z.object({ attributes: z.object({ field_prs_type: z.string().nullish() }) }).optional(),
 });
-type Record = z.infer<typeof Record>;
-const Response = z.object({ numFound: z.number(), results: z.array(Record) });
+type PrsRecord = z.infer<typeof PrsRecord>;
+const SearchResponse = z.object({ numFound: z.number(), results: z.array(PrsRecord) });
 
 const isoDay = (seconds: number | null | undefined) => (seconds === null || seconds === undefined ? null : new Date(seconds * 1000).toISOString().slice(0, 10));
 
-export const toRecord = (r: Record) => {
+export const toRecord = (r: PrsRecord) => {
   const undertaking = r.data?.attributes.field_prs_type === 'EU';
   const action = undertaking ? 'Enforceable undertaking' : 'WHS prosecution';
   return {
@@ -44,11 +46,11 @@ export const toRecord = (r: Record) => {
   };
 };
 
-// One API page for each invocation. Paging stops at a page that holds an
-// outcome older than the last date seen, as in `vic-court.ts`.
+// One API page for each invocation.
+const REREAD_DAYS = 90;
 const PageState = z.object({ page: z.number(), newest: z.string().nullable() });
 
-const fetchPage = ({ page, since, newestSoFar }: { page: number; since: string | null; newestSoFar: string | null }): ResultAsync<FetchOutcome, SourceError> => {
+const fetchPage = ({ page, cursor, newestSoFar }: { page: number; cursor: string | null; newestSoFar: string | null }): ResultAsync<FetchOutcome, SourceError> => {
   const params = new URLSearchParams({
     record_type: 'prs',
     rows: String(PAGE_ROWS),
@@ -59,22 +61,14 @@ const fetchPage = ({ page, since, newestSoFar }: { page: number; since: string |
     _format: 'json',
   });
   const url = `${API}?${params}`;
-  return getJson({ url }).andThen(({ json, text }) => {
-    const parsed = Response.safeParse(json);
-    if (!parsed.success) return errAsync<FetchOutcome, SourceError>({ type: 'parse', url, message: parsed.error.message.slice(0, 500) });
+  return getJson({ url }).andThen(({ json }) => {
+    const parsed = SearchResponse.safeParse(json);
+    if (!parsed.success) return parseError(url, parsed.error.message);
     const records = parsed.data.results.map(toRecord);
-    const fresh = since === null ? records : records.filter((r) => r.publishedAt !== null && r.publishedAt >= since);
-    const newest = [newestSoFar, ...fresh.map((r) => r.publishedAt)].filter((d): d is string => d !== null).sort().at(-1) ?? null;
-    const reachedKnown = since !== null && records.some((r) => r.publishedAt !== null && r.publishedAt < since);
+    const { fresh, newest, reachedKnown } = newestFirstPage({ rows: records, dateOf: (r) => r.publishedAt, cursor, newestSoFar, rereadDays: REREAD_DAYS });
     const reachedEnd = records.length < PAGE_ROWS || (page + 1) * PAGE_ROWS >= parsed.data.numFound || page + 1 >= MAX_PAGES;
-    if (page === 0 && fresh.length === 0) return okAsync<FetchOutcome, SourceError>({ type: 'unchanged' });
-    return okAsync<FetchOutcome, SourceError>({
-      type: 'changed',
-      records: fresh,
-      cursor: newest ?? since,
-      raw: [{ name: `prs-${page}.json`, body: text }],
-      next: reachedKnown || reachedEnd ? null : { page: page + 1, newest },
-    });
+    if (page === 0 && fresh.length === 0) return unchanged();
+    return changed({ records: fresh, cursor: newest, next: reachedKnown || reachedEnd ? null : { page: page + 1, newest } });
   });
 };
 
@@ -85,10 +79,8 @@ export const worksafeVic: Source = {
   jurisdiction: 'VIC',
   homepage: REGISTER_PAGE,
   run: ({ cursor, page }) => {
-    if (page === null) return fetchPage({ page: 0, since: cursor, newestSoFar: null });
+    if (page === null) return fetchPage({ page: 0, cursor, newestSoFar: null });
     const state = PageState.safeParse(page);
-    return state.success
-      ? fetchPage({ page: state.data.page, since: cursor, newestSoFar: state.data.newest })
-      : errAsync({ type: 'parse', url: API, message: 'The page state is not valid.' });
+    return state.success ? fetchPage({ page: state.data.page, cursor, newestSoFar: state.data.newest }) : badPageState(API);
   },
 };

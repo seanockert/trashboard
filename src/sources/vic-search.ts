@@ -1,29 +1,19 @@
-import { errAsync, okAsync, ResultAsync } from 'neverthrow';
+import type { ResultAsync } from 'neverthrow';
 import { z } from 'zod';
+import { badPageState, changed, parseError, unchanged } from './common';
+import { daysAgo, newestOf } from './dates';
 import { htmlToText } from './html';
+import { postJson } from './http';
 import type { FetchOutcome, Source, SourceContext, SourceError } from './types';
 
 // Victorian government sites run on one platform with an open search proxy.
 // It is not a documented API, thus the schema check here fails loudly if it changes.
 
-const USER_AGENT = 'Trashboard/0.1 (private research tool; one request per source per day)';
 const FIRST_RUN_DAYS = 365;
 const SIZE = 200;
 
-const searchPost = ({ url, body }: { url: string; body: unknown }) =>
-  ResultAsync.fromPromise(
-    fetch(url, { method: 'POST', headers: { 'user-agent': USER_AGENT, 'content-type': 'application/json' }, body: JSON.stringify(body) }).then(async (res) => ({
-      status: res.status,
-      text: await res.text(),
-    })),
-    (cause): SourceError => ({ type: 'network', url, cause }),
-  ).andThen(({ status, text }) => {
-    if (status < 200 || status >= 300) return errAsync<unknown, SourceError>({ type: 'http', url, status });
-    return ResultAsync.fromPromise(
-      Promise.resolve().then((): unknown => JSON.parse(text)),
-      (): SourceError => ({ type: 'parse', url, message: 'The response is not valid JSON.' }),
-    );
-  });
+// Paths from the search can start with the ID of the site, for example "/site-1523/news/...".
+export const sitePath = (path: string) => path.replace(/^\/site-\d+/, '');
 
 // Each field comes as a list with one value.
 const first = z.array(z.string()).transform((list) => list[0] ?? '');
@@ -34,8 +24,6 @@ export const newsBody = (summary: string, text: string) =>
   summary === '' || text.startsWith(summary) ? text : text === '' ? summary : `${summary}\n${text}`;
 
 const Hits = z.object({ hits: z.object({ hits: z.array(z.object({ _source: z.unknown() })) }) });
-
-const firstRunSince = (now: Date) => new Date(now.getTime() - FIRST_RUN_DAYS * 86_400_000).toISOString();
 
 const PageState = z.object({ since: z.string(), from: z.number(), newest: z.string().nullable() });
 
@@ -57,8 +45,8 @@ const run =
     toItem: (hit: z.infer<T>) => R;
   }) =>
   ({ cursor, now, page, since }: SourceContext): ResultAsync<FetchOutcome, SourceError> => {
-    const state = page === null ? { since: since ?? cursor ?? firstRunSince(now), from: 0, newest: null } : PageState.safeParse(page).data;
-    if (state === undefined) return errAsync({ type: 'parse', url, message: 'The page state is not valid.' });
+    const state = page === null ? { since: since ?? cursor ?? daysAgo(now, FIRST_RUN_DAYS), from: 0, newest: null } : PageState.safeParse(page).data;
+    if (state === undefined) return badPageState(url);
     const body = {
       size: SIZE,
       from: state.from,
@@ -66,21 +54,16 @@ const run =
       query: { bool: { filter: [...filters, { range: { [dateField]: { gte: state.since } } }] } },
       sort: [{ [dateField]: 'asc' }],
     };
-    return searchPost({ url, body }).andThen((json) => {
+    return postJson({ url, body }).andThen(({ json }) => {
       const envelope = Hits.safeParse(json);
-      const parsed = z.array(schema).safeParse(envelope.success ? envelope.data.hits.hits.map((h) => h._source) : null);
-      if (!parsed.success) return errAsync<FetchOutcome, SourceError>({ type: 'parse', url, message: parsed.error.message });
+      if (!envelope.success) return parseError(url, envelope.error.message);
+      const parsed = z.array(schema).safeParse(envelope.data.hits.hits.map((h) => h._source));
+      if (!parsed.success) return parseError(url, parsed.error.message);
       const hits = parsed.data;
-      if (state.from === 0 && hits.length === 0) return okAsync<FetchOutcome, SourceError>({ type: 'unchanged' });
-      const newest = [state.newest, ...hits.map(dateOf)].filter((d): d is string => d !== null).sort().at(-1) ?? null;
+      if (state.from === 0 && hits.length === 0) return unchanged();
+      const newest = newestOf([state.newest, ...hits.map(dateOf)]);
       const isLast = hits.length < SIZE;
-      return okAsync<FetchOutcome, SourceError>({
-        type: 'changed',
-        records: hits.map(toItem),
-        cursor: newest ?? state.since,
-        next: isLast ? null : { since: state.since, from: state.from + SIZE, newest },
-        raw: [{ name: `search-${state.from}.json`, body: JSON.stringify(json) }],
-      });
+      return changed({ records: hits.map(toItem), cursor: newest ?? state.since, next: isLast ? null : { since: state.since, from: state.from + SIZE, newest } });
     });
   };
 
@@ -123,7 +106,7 @@ export const vicLegislation: Source = {
         externalId: `${hit.nid[0] ?? hit.url}:${version}`,
         jurisdiction: 'VIC',
         title: hit.title,
-        url: `https://www.legislation.vic.gov.au${hit.url.replace(/^\/site-\d+/, '')}`,
+        url: `https://www.legislation.vic.gov.au${sitePath(hit.url)}`,
         publishedAt: (hit.field_in_force_effective_date || hit.changed).slice(0, 10),
         body: `${label}: ${hit.title}${version === '' ? '' : ` (version ${version})`}`,
       };
@@ -161,7 +144,7 @@ export const epaVicNews: Source = {
       externalId: String(hit.nid[0] ?? hit.url),
       jurisdiction: 'VIC',
       title: hit.title,
-      url: `https://www.epa.vic.gov.au${hit.url.replace(/^\/site-\d+/, '')}`,
+      url: `https://www.epa.vic.gov.au${sitePath(hit.url)}`,
       publishedAt: (hit.field_news_date || hit.created).slice(0, 10),
       body: newsBody(hit.field_landing_page_summary, htmlToText(hit.body)),
     }),

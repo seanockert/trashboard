@@ -1,8 +1,10 @@
-import { errAsync, okAsync, type ResultAsync } from 'neverthrow';
+import type { ResultAsync } from 'neverthrow';
 import { z } from 'zod';
-import { between, htmlToText } from './html';
+import { badPageState, changed, newestFirstPage, parseError, unchanged } from './common';
+import { mainText } from './html';
 import { getJson } from './http';
 import type { FetchOutcome, Source, SourceError } from './types';
+import { sitePath } from './vic-search';
 
 // The JSON API behind the EPA Victoria court proceedings register. It gives
 // 10 records for each page, newest first.
@@ -18,7 +20,7 @@ const Page = z.object({
 type CourtRecord = z.infer<typeof Page>['records'][number];
 
 const toItem = (record: CourtRecord) => {
-  const url = `${SITE}${record.url.replace(/^\/site-\d+/, '')}`;
+  const url = `${SITE}${sitePath(record.url)}`;
   return {
     kind: 'enforcement',
     externalId: String(record.nid),
@@ -28,43 +30,33 @@ const toItem = (record: CourtRecord) => {
     publishedAt: record.date.slice(0, 10),
     body: '',
     detailUrl: url,
-    party: record.title.replace(/\s*\(ACN:?[\s\d]+\)\s*$/i, ''),
+    // The ACN stays. It shows that the party is a company.
+    party: record.title,
     action: 'Court proceeding',
     location: record.location,
     penaltyAud: null,
   };
 };
 
-// One API page for each invocation. Paging stops at a page that holds a
-// record older than the last date seen. Records on that date come again, and
-// the upsert ignores the ones that did not change.
+// One API page for each invocation.
+const REREAD_DAYS = 90;
 const PageState = z.object({ page: z.number(), newest: z.string().nullable() });
 
-const fetchPage = ({ page, since, newestSoFar }: { page: number; since: string | null; newestSoFar: string | null }): ResultAsync<FetchOutcome, SourceError> => {
+const fetchPage = ({ page, cursor, newestSoFar }: { page: number; cursor: string | null; newestSoFar: string | null }): ResultAsync<FetchOutcome, SourceError> => {
   const url = `${API}?page=${page}&pageSize=10`;
-  return getJson({ url }).andThen(({ json, text }) => {
+  return getJson({ url }).andThen(({ json }) => {
     const parsed = Page.safeParse(json);
-    if (!parsed.success) return errAsync<FetchOutcome, SourceError>({ type: 'parse', url, message: parsed.error.message });
+    if (!parsed.success) return parseError(url, parsed.error.message);
     const records = parsed.data.records;
-    const fresh = since === null ? records : records.filter((r) => r.date >= since);
-    const newest = [newestSoFar, ...fresh.map((r) => r.date)].filter((d): d is string => d !== null).sort().at(-1) ?? null;
-    const reachedKnown = since !== null && records.some((r) => r.date < since);
+    const { fresh, newest, reachedKnown } = newestFirstPage({ rows: records, dateOf: (r) => r.date, cursor, newestSoFar, rereadDays: REREAD_DAYS });
     const reachedEnd = records.length === 0 || page * 10 >= parsed.data.total || page >= MAX_PAGES;
-    const isLast = reachedKnown || reachedEnd;
-    if (page === 1 && fresh.length === 0) return okAsync<FetchOutcome, SourceError>({ type: 'unchanged' });
-    return okAsync<FetchOutcome, SourceError>({
-      type: 'changed',
-      records: fresh.map(toItem),
-      cursor: newest ?? since,
-      raw: [{ name: `court-proceedings-${page}.json`, body: text }],
-      next: isLast ? null : { page: page + 1, newest },
-    });
+    if (page === 1 && fresh.length === 0) return unchanged();
+    return changed({ records: fresh.map(toItem), cursor: newest, next: reachedKnown || reachedEnd ? null : { page: page + 1, newest } });
   });
 };
 
 export const extractVicDetail = (html: string) => {
-  const main = between({ html, start: /<main[\s>]/i, end: /<\/main>/i });
-  const text = htmlToText(main);
+  const text = mainText(html);
   const start = text.indexOf('Date of offence');
   const end = text.lastIndexOf('\nUpdated');
   return text.slice(start < 0 ? 0 : start, end < 0 ? undefined : end).trim();
@@ -78,10 +70,8 @@ export const vicCourt: Source = {
   homepage: REGISTER_PAGE,
   extractDetail: extractVicDetail,
   run: ({ cursor, page }) => {
-    if (page === null) return fetchPage({ page: 1, since: cursor, newestSoFar: null });
+    if (page === null) return fetchPage({ page: 1, cursor, newestSoFar: null });
     const state = PageState.safeParse(page);
-    return state.success
-      ? fetchPage({ page: state.data.page, since: cursor, newestSoFar: state.data.newest })
-      : errAsync({ type: 'parse', url: API, message: 'The page state is not valid.' });
+    return state.success ? fetchPage({ page: state.data.page, cursor, newestSoFar: state.data.newest }) : badPageState(API);
   },
 };

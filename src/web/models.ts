@@ -83,7 +83,10 @@ const SNIPPET_MIN_EXTRA = 40;
 export const snippet = (item: StoredItem) =>
   item.body.includes(item.title) && item.body.length - item.title.length < SNIPPET_MIN_EXTRA ? '' : item.body;
 
-export const sinceDate = (days: number, now: Date) => new Date(now.getTime() - days * 86_400_000).toISOString().slice(0, 10);
+// The user is in Brisbane. A day in UTC starts at 10:00 there, thus each day on a page is a Brisbane day.
+export const brisbaneDay = (date: Date) => date.toLocaleDateString('en-CA', { timeZone: 'Australia/Brisbane' });
+
+export const sinceDate = (days: number, now: Date) => brisbaneDay(new Date(now.getTime() - days * 86_400_000));
 
 export type Tag<K extends string = string> = { key: K; label: string };
 export type PriorityLevel = 'high' | 'medium' | 'low';
@@ -186,7 +189,10 @@ export const Quarter = z.string().regex(/^\d{4}-Q[1-4]$/);
 
 const QUARTER_MONTHS = ['January to March', 'April to June', 'July to September', 'October to December'];
 
-export const quarterOf = (date: Date) => `${date.getUTCFullYear()}-Q${Math.floor(date.getUTCMonth() / 3) + 1}`;
+export const quarterOf = (date: Date) => {
+  const day = brisbaneDay(date);
+  return `${day.slice(0, 4)}-Q${Math.floor((Number(day.slice(5, 7)) - 1) / 3) + 1}`;
+};
 
 export const quarterRange = (quarter: string) => {
   const year = Number(quarter.slice(0, 4));
@@ -197,8 +203,12 @@ export const quarterRange = (quarter: string) => {
 };
 
 // The current quarter and the ones before it, newest first.
-export const recentQuarters = (now: Date, count: number) =>
-  Array.from({ length: count }, (_, i) => quarterOf(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 3 * i, 1))));
+// Day 15 of a month is the same month in UTC and in Brisbane.
+export const recentQuarters = (now: Date, count: number) => {
+  const day = brisbaneDay(now);
+  const [year, month] = [Number(day.slice(0, 4)), Number(day.slice(5, 7)) - 1];
+  return Array.from({ length: count }, (_, i) => quarterOf(new Date(Date.UTC(year, month - 3 * i, 15))));
+};
 
 export type BandStat = { band: 'high' | 'medium' | 'low' | 'hidden'; count: number; useful: number; types: { type: string; count: number; useful: number }[] };
 

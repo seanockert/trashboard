@@ -17,7 +17,7 @@ export const PRIORITY_MIN = 0.15;
 export const PRIORITY_HIGH = 0.45;
 export const PRIORITY_MEDIUM = 0.25;
 
-const WEIGHTS ={ impact: 1, action: 0.5, submissions: 0.3 };
+const WEIGHTS = { impact: 1, action: 0.5, submissions: 0.3 };
 
 const answer = (path: string) => `COALESCE(json_extract(answers, '$.${path}'), 0)`;
 

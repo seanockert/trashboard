@@ -1,8 +1,9 @@
-import { errAsync, okAsync, type ResultAsync } from 'neverthrow';
+import type { ResultAsync } from 'neverthrow';
 import { z } from 'zod';
-import { PARTY_GROUPS } from '../parties';
+import { JJR } from '../parties';
+import { badPageState, changed, lines, newestFirstPage, parseError, text } from './common';
 import { datesIn } from './dates';
-import { getJson, getText } from './http';
+import { BROWSER_USER_AGENT, getJson, getText } from './http';
 import type { FetchOutcome, Source, SourceError } from './types';
 
 // Changes to the licences and environmental authorities that JJ Richards
@@ -10,13 +11,7 @@ import type { FetchOutcome, Source, SourceError } from './types';
 // names JJ Richards, thus the user sees each change.
 // A query to the source finds candidates by a broad name match. Code then
 // keeps only the names that the JJ Richards pattern matches.
-const JJR = PARTY_GROUPS[0];
 const isJjr = (name: string) => JJR.pattern.test(name);
-
-const parseError = (url: string, message: string) => errAsync<FetchOutcome, SourceError>({ type: 'parse', url, message: message.slice(0, 500) });
-
-const changed = ({ records, name, body }: { records: unknown[]; name: string; body: string }) =>
-  okAsync<FetchOutcome, SourceError>({ type: 'changed', records, cursor: null, raw: [{ name, body }], next: null });
 
 // QLD: the register of applications for environmental authorities. A new
 // status of an application changes its item, and the item then gets new tags.
@@ -26,7 +21,6 @@ const QLD_DATASET = 'https://www.data.qld.gov.au/dataset/environmental-authority
 // PostgreSQL regular expression. The JavaScript pattern of the group cannot go in the SQL as it is.
 const QLD_NAMES = "(j\\.? ?j\\.?''?s? ?richards|jj''s waste|southern oil|createnergy|handybin)";
 
-const text = z.string().nullish().transform((value) => (value ?? '').trim());
 const QldApplication = z.object({
   'Application Number': z.string().min(1),
   'Application Action': text,
@@ -41,12 +35,6 @@ const QldApplication = z.object({
   'Permit Effective Date': text,
 });
 type QldApplication = z.infer<typeof QldApplication>;
-
-const lines = (pairs: [string, string][]) =>
-  pairs
-    .filter(([, value]) => value !== '')
-    .map(([name, value]) => `${name}: ${value}`)
-    .join('\n');
 
 export const qldApplicationRecord = (a: QldApplication) => {
   const action = a['Application Action'] === 'Amend' ? 'Amendment application' : 'Application';
@@ -76,15 +64,16 @@ const QldSql = z.object({ result: z.object({ records: z.array(QldApplication) })
 
 const runQld = (): ResultAsync<FetchOutcome, SourceError> =>
   getJson({ url: QLD_PACKAGE }).andThen(({ json }) => {
-    const resource = QldPackage.safeParse(json).data?.result.resources.find((r) => r.datastore_active === true);
+    const parsed = QldPackage.safeParse(json);
+    if (!parsed.success) return parseError(QLD_PACKAGE, parsed.error.message);
+    const resource = parsed.data.result.resources.find((r) => r.datastore_active === true);
     if (resource === undefined) return parseError(QLD_PACKAGE, 'No resource with an active datastore.');
     const sql = `SELECT * FROM "${resource.id}" WHERE "Principal Applicant" ~* '${QLD_NAMES}'`;
     const url = `${QLD_API}/datastore_search_sql?${new URLSearchParams({ sql })}`;
-    return getJson({ url }).andThen(({ json: rows, text: body }) => {
-      const parsed = QldSql.safeParse(rows);
-      if (!parsed.success) return parseError(url, parsed.error.message);
-      const records = parsed.data.result.records.filter((a) => isJjr(a['Principal Applicant'])).map(qldApplicationRecord);
-      return changed({ records, name: 'applications.json', body });
+    return getJson({ url }).andThen(({ json: rows }) => {
+      const found = QldSql.safeParse(rows);
+      if (!found.success) return parseError(url, found.error.message);
+      return changed({ records: found.data.result.records.filter((a) => isJjr(a['Principal Applicant'])).map(qldApplicationRecord) });
     });
   });
 
@@ -150,14 +139,14 @@ const runVic = (): ResultAsync<FetchOutcome, SourceError> => {
     CQL_FILTER: `strToLowerCase(place_or_premises) LIKE '%richards%' OR acn = '${JJR_ACN}'`,
   });
   const url = `${VIC_WFS}?${params}`;
-  return getJson({ url }).andThen(({ json, text: body }) => {
+  return getJson({ url }).andThen(({ json }) => {
     const parsed = VicCollection.safeParse(json);
     if (!parsed.success) return parseError(url, parsed.error.message);
     const records = parsed.data.features
       .map((f) => f.properties)
       .filter((l) => l.acn === JJR_ACN || isJjr(l.place_or_premises))
       .map(vicLicenceRecord);
-    return changed({ records, name: 'licences.json', body });
+    return changed({ records });
   });
 };
 
@@ -178,8 +167,8 @@ const SA_REGISTER = 'https://www.publicregister.epa.sa.gov.au/';
 const SA_PAGE_ROWS = 100;
 // About three weeks of changes are on one page. A run with no cursor reads back about 12 months.
 const SA_FIRST_RUN_PAGES = 17;
-// CloudFront refuses requests without a browser user agent and an Accept header that includes JavaScript.
-const SA_HEADERS = { 'user-agent': 'Mozilla/5.0 (compatible; Trashboard/0.1)', accept: 'application/json, text/javascript, */*' };
+// CloudFront also refuses an Accept header that does not include JavaScript.
+const SA_HEADERS = { 'user-agent': BROWSER_USER_AGENT, accept: 'application/json, text/javascript, */*' };
 
 const SaChange = z.object({ id: z.number(), recordNumber: z.string(), version: z.number(), status: text, type: text, mainName: text, updateReason: text, dateImported: text });
 type SaChange = z.infer<typeof SaChange>;
@@ -210,27 +199,18 @@ export const saChangeRecord = (c: SaChange) => ({
   ]),
 });
 
-// The cursor is the newest change date seen. Paging stops at a page that holds an older change.
+// The cursor is the newest change date seen. The date is the import date, thus a run needs no re-read.
 const SaState = z.object({ page: z.number().int().min(0), newest: z.string().nullable() });
 
-const fetchSa = ({ page, since, newestSoFar }: { page: number; since: string | null; newestSoFar: string | null }): ResultAsync<FetchOutcome, SourceError> => {
+const fetchSa = ({ page, cursor, newestSoFar }: { page: number; cursor: string | null; newestSoFar: string | null }): ResultAsync<FetchOutcome, SourceError> => {
   const url = `${SA_API}?${new URLSearchParams({ location: 'area', type: 'A', pageSize: String(SA_PAGE_ROWS), offset: String(page * SA_PAGE_ROWS) })}`;
   return getText({ url, headers: SA_HEADERS }).andThen(({ text: body }) => {
     const parsed = SaPage.safeParse(readJsonp(body));
     if (!parsed.success) return parseError(url, parsed.error.message);
-    const all = parsed.data.results.map(saChangeRecord);
-    const dates = all.map((r) => r.publishedAt).filter((d): d is string => d !== null);
-    const newest = [newestSoFar, ...dates].filter((d): d is string => d !== null).sort().at(-1) ?? null;
-    const reachedKnown = since !== null && dates.some((d) => d < since);
-    const reachedEnd = all.length < SA_PAGE_ROWS || (page + 1) * SA_PAGE_ROWS >= parsed.data.total || (since === null && page + 1 >= SA_FIRST_RUN_PAGES);
-    const records = parsed.data.results.filter((c) => isJjr(c.mainName)).map(saChangeRecord);
-    return okAsync<FetchOutcome, SourceError>({
-      type: 'changed',
-      records,
-      cursor: newest ?? since,
-      raw: [{ name: `changes-${page}.json`, body }],
-      next: reachedKnown || reachedEnd ? null : { page: page + 1, newest },
-    });
+    const rows = parsed.data.results;
+    const { fresh, newest, reachedKnown } = newestFirstPage({ rows, dateOf: (c) => datesIn(c.dateImported)[0] ?? null, cursor, newestSoFar, rereadDays: 0 });
+    const reachedEnd = rows.length < SA_PAGE_ROWS || (page + 1) * SA_PAGE_ROWS >= parsed.data.total || (cursor === null && page + 1 >= SA_FIRST_RUN_PAGES);
+    return changed({ records: fresh.filter((c) => isJjr(c.mainName)).map(saChangeRecord), cursor: newest, next: reachedKnown || reachedEnd ? null : { page: page + 1, newest } });
   });
 };
 
@@ -241,8 +221,8 @@ export const saLicences: Source = {
   jurisdiction: 'SA',
   homepage: SA_REGISTER,
   run: ({ cursor, page }) => {
-    if (page === null) return fetchSa({ page: 0, since: cursor, newestSoFar: null });
+    if (page === null) return fetchSa({ page: 0, cursor, newestSoFar: null });
     const state = SaState.safeParse(page);
-    return state.success ? fetchSa({ page: state.data.page, since: cursor, newestSoFar: state.data.newest }) : parseError(SA_API, 'The page state is not valid.');
+    return state.success ? fetchSa({ page: state.data.page, cursor, newestSoFar: state.data.newest }) : badPageState(SA_API);
   },
 };

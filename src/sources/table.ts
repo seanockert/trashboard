@@ -1,13 +1,10 @@
-import { decodeEntities } from './html';
+import { inlineText } from './html';
 
 export type HtmlTable = { headers: string[]; rows: string[][] };
 
-// A cell needs only one line of text, thus this is simpler and faster than `htmlToText`.
-const cellText = (html: string) => decodeEntities(html.replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
-
 const CELL = { th: /<(th)\b[^>]*>([\s\S]*?)<\/th>/gi, any: /<(th|td)\b[^>]*>([\s\S]*?)<\/\1>/gi };
 
-const cells = (rowHtml: string, kind: keyof typeof CELL) => [...rowHtml.matchAll(CELL[kind])].map((m) => cellText(m[2] ?? ''));
+const cells = (rowHtml: string, kind: keyof typeof CELL) => [...rowHtml.matchAll(CELL[kind])].map((m) => inlineText(m[2] ?? ''));
 
 // Every <table> in the page, with its header cells and body rows as text.
 export const readTables = (html: string): HtmlTable[] =>

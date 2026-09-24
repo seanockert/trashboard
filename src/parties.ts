@@ -71,7 +71,10 @@ export const isCompanyName = (name: string): boolean =>
     .filter((part) => part !== '')
     .every((part) => COMPANY_MARKER.test(part));
 
-const JJR = PARTY_GROUPS[0];
+// Increase this when a pattern changes. Items with an older version get their group again.
+export const PARTIES_VERSION = 1;
+
+export const JJR = PARTY_GROUPS[0];
 
 // Aliases that are also common words in titles, for example "Time to rethink packaging".
 const COMMON_WORD_ALIASES = /\brethink\b/gi;
@@ -82,3 +85,7 @@ const COMMON_WORD_ALIASES = /\brethink\b/gi;
 // sees every item about the company.
 export const mentionedGroup = ({ title, body }: { title: string; body: string }): PartyGroupId | null =>
   JJR.pattern.test(`${title}\n${body}`) ? JJR.id : findPartyGroup(title.replace(COMMON_WORD_ALIASES, ' '));
+
+// The group of an item. An enforcement record has the group of its party.
+export const groupOf = (item: { kind: 'regulatory' | 'enforcement'; party: string | null; title: string; body: string }): PartyGroupId | null =>
+  item.kind === 'enforcement' ? (item.party === null ? null : findPartyGroup(item.party)) : mentionedGroup(item);

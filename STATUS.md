@@ -17,12 +17,12 @@ Workers AI writes a short summary for each card that the views show by default.
 
 | Part | State |
 | --- | --- |
-| Project setup (TypeScript, Hono, Wrangler, D1, R2, Queues, Cron) | Done |
+| Project setup (TypeScript, Hono, Wrangler, D1, Queues, Cron) | Done |
 | 21 sources (14 regulatory, 7 enforcement) | Done, tested live |
 | Regulatory changes view | Done |
 | Enforcement view (JJR and competitors) | Done |
 | Search (D1 full-text search, then Jev rerank) | Done |
-| Password login | Done |
+| Password login, 5 attempts each minute for each IP address | Done |
 | Bookmarks (Watching or Acting, with a note) | Done |
 | Deadlines view (submission close dates and start dates from the source text) | Done |
 | Company tag on regulatory items. Items that name JJ Richards are always shown, first | Done |
@@ -30,7 +30,7 @@ Workers AI writes a short summary for each card that the views show by default.
 | Quarterly report, to print or save as PDF | Done |
 | Priority check: "Useful to you?" labels and the useful share for each priority band | Done. Needs labels from the user |
 | Card summaries (Workers AI, Llama 3.1 8B) | Done. Not deployed |
-| Unit tests (parsers, company filter, dates, penalty selection, summary checks) | Done, 75 tests |
+| Unit tests (parsers, paging, company filter, dates, penalty selection, summary checks) | Done, 95 tests |
 | Fit the Workers Free plan (10 ms CPU, 50 subrequests for each invocation) | Done locally. Check real CPU time after deploy |
 | Deploy to Cloudflare (`trashboard.seanockert.workers.dev`) | Not started |
 | Labelled test set (about 100 items) to measure tag accuracy | Not started. Needs labels from the user |
@@ -47,14 +47,14 @@ Workers AI writes a short summary for each card that the views show by default.
 | NSW EPA news | Regulatory | HTML | Article text from each page. A backfill reads the list pages to its start date |
 | EPA Victoria news | Regulatory | Site search endpoint | Not a documented API |
 | QLD enforcement register | Enforcement | CKAN datastore API | No description of the conduct. Code reads the ERA codes |
-| EPA Victoria court proceedings | Enforcement | JSON endpoint | Full summary from each page |
+| EPA Victoria court proceedings | Enforcement | JSON endpoint | Full summary from each page. A run reads again the 90 days before the newest date seen |
 | WA DWER enforcement | Enforcement | HTML tables | Notices, penalty notices, prosecutions |
 | SA EPA prosecutions | Enforcement | HTML table | Needs a browser-like user agent |
 | NSW EPA prosecutions | Enforcement | Salesforce Apex call behind the register search | Not a documented API. One search for each company word ("pty", "ltd" and others), 300 matters for each invocation. Fines for each charge |
-| WorkSafe Victoria prosecution result summaries | Enforcement | JSON search API | Not a documented API. 20 records for each page, newest first |
+| WorkSafe Victoria prosecution result summaries | Enforcement | JSON search API | Not a documented API. 20 records for each page, newest first. A run reads again the 90 days before the newest date seen |
 | SafeWork NSW prosecutions | Enforcement | HTML, one page for each month | The index gives the month pages. A run reads again the 2 months before the newest date seen |
 | NSW EPA Your Say | Regulatory (consultations) | JSON behind the "load more" list of open projects | Not a documented API. The close date is on each project page, thus the page is the item detail |
-| Engage Victoria | Regulatory (consultations) | Inertia page data as JSON | Not a documented API. Needs the version from the home page. Open projects only. EPA Victoria also uses this site |
+| Engage Victoria | Regulatory (consultations) | Inertia page data as JSON | Not a documented API. Needs the version from the home page. Open projects only. EPA Victoria also uses this site. A licence application that names a person is not kept |
 | DCCEEW consultation hub | Regulatory (consultations) | Converlens search call behind the hub page | Not a documented API. Open consultations, with start and end times |
 | WA DWER consultations | Regulatory (consultations) | Citizen Space search API | All consultations, about 40, in one response |
 | QLD environmental authority applications | Regulatory (JJ Richards only) | CKAN datastore SQL | New and amendment applications, with their status |
@@ -94,6 +94,8 @@ A better measure is precision above a priority threshold, and recall on a labell
 ## Workers Free plan design
 
 - One ingest message is one page of one source. A page sends the next page as a new message. The cursor moves only after the last page.
+- Remote runs on 2026-09-23 stored pages of up to 376 records with no failure.
+- The pipeline does not keep a copy of the source files. They can hold names of persons.
 - QLD uses the CKAN datastore API in pages of 400 rows. A page ends at a reference boundary, thus no record holds only some of its rows.
 - One item message holds up to 10 items: 10 Jev requests, up to 10 detail pages and up to 10 Workers AI requests. Only the failed items go back on the queue.
 - The views do the filters, the sort, the counts and the paging in D1 SQL over the stored answers (`json_extract`). The Worker parses only the 50 rows on the page. The ranking policy is in `src/rank.ts`.
@@ -103,7 +105,8 @@ A better measure is precision above a priority threshold, and recall on a labell
 ## Deadlines, company tags and labels
 
 - Code finds each date in the text of a regulatory item. Jev selects the date when submissions close and the date when the rule starts to apply, as for penalties. A stored date is always a date that the source states.
-- A regulatory item names a company group when a group name is in its title. JJ Richards counts in the body too. An item that names JJ Richards passes the relevance gate and is first in the list.
+- A regulatory item names a company group when a group name is in its title. JJ Richards counts in the body too.
+- Code sets the group each time it stores the text of an item. After a change to a pattern in `src/parties.ts`, increase `PARTIES_VERSION`. The daily run then sets the group again for each item, with no new tags. An item that names JJ Richards passes the relevance gate and is first in the list.
 - Consultation sites give the close date as free text. The body starts with that text, thus Jev selects the close date as for other items. A date with no year ("9 May") gets its year from the publication date.
 - A check of the past 12 months found about 19 relevant consultations on NSW EPA Your Say and Engage Victoria, and about 12 on the DCCEEW and WA DWER sites. About 15 of the NSW and VIC ones had no news release in the news sources.
 - Consultation sites that were checked and not added: QLD Have Your Say and DETSI (free-text dates, a Cloudflare challenge, about 1 relevant item each year), SA YourSAy (dates only on each project page, about 2 relevant items each year), NHVR (about 2 each year).
@@ -136,8 +139,8 @@ A better measure is precision above a priority threshold, and recall on a labell
 
 ## Before deploy
 
-- Create the D1 database `trashboard`, the R2 bucket `trashboard-raw` and the queues `trashboard-ingest` and `trashboard-items`, then put the database ID in `wrangler.jsonc`.
-- Apply the migrations: `npm run db:migrate:remote`.
+- Create the D1 database `trashboard` and the queues `trashboard-ingest` and `trashboard-items`, then put the database ID in `wrangler.jsonc`.
+- Apply the migrations: `npm run db:migrate:remote`. Before launch, the schema changes go into `migrations/0001_init.sql`, and `npm run db:reset:remote` deletes all tables and data and applies it again.
 - After the deploy, click "Tag and summarise waiting items" on the Sources page. Tag version 4 changes the questions, thus the views are empty until the items have new tags.
 - Set the secrets: `TYPESAFE_API_KEY`, `DASHBOARD_PASSWORD`, `SESSION_SECRET`.
 - Test the SA EPA source from Cloudflare. CloudFront can block Cloudflare egress addresses.

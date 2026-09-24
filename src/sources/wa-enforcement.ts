@@ -1,12 +1,17 @@
-import { ResultAsync } from 'neverthrow';
-import { dollarTotal, latestDate } from './dates';
+import { changed, lines, tryParse } from './common';
+import { latestDate } from './dates';
 import { getText } from './http';
 import { slug, withUniqueIds } from './ids';
 import { readTables, type HtmlTable } from './table';
-import type { Source, SourceError } from './types';
+import type { Source } from './types';
 
 const PAGE = 'https://www.wa.gov.au/service/environment/business-and-community-assistance/environmental-enforcement';
 
+// The sum of the dollar amounts in a cell, for example "$3750 $11,250".
+const dollarTotal = (text: string) => {
+  const amounts = [...text.matchAll(/\$\s?([\d,]+(?:\.\d{2})?)/g)].map((m) => Number((m[1] ?? '').replace(/,/g, '')));
+  return amounts.length === 0 ? null : amounts.reduce((sum, n) => sum + n, 0);
+};
 
 type Columns = Record<string, string>;
 const byHeader = (table: HtmlTable) => table.rows.map((row): Columns => Object.fromEntries(table.headers.map((h, i) => [h.toLowerCase(), row[i] ?? ''])));
@@ -23,9 +28,12 @@ const notices = (rows: Columns[]) =>
       title: `${type === 'EPN' ? 'Environmental protection notice' : type || 'Notice'}: ${party}`,
       url: PAGE,
       publishedAt: latestDate(col(row, 'date of issue')),
-      body: [`Notice type: ${type}`, `Premises: ${col(row, 'premise')}`, `Status: ${col(row, 'status')}`, `Amendments: ${col(row, 'notice amendments')}`]
-        .filter((line) => !line.endsWith(': '))
-        .join('\n'),
+      body: lines([
+        ['Notice type', type],
+        ['Premises', col(row, 'premise')],
+        ['Status', col(row, 'status')],
+        ['Amendments', col(row, 'notice amendments')],
+      ]),
       party,
       action: type === 'EPN' ? 'Environmental protection notice' : type || 'Notice',
       location: col(row, 'suburb') || null,
@@ -43,7 +51,12 @@ const penaltyNotices = (rows: Columns[]) =>
       title: `Modified penalty notice: ${party}`,
       url: PAGE,
       publishedAt: latestDate(col(row, 'date paid')) ?? latestDate(col(row, 'date of offence')),
-      body: [`Offence: ${col(row, 'offence under')}`, `Summary: ${col(row, 'summary')}`, `Date of offence: ${col(row, 'date of offence')}`, `Penalty: ${col(row, 'penalty')}`].join('\n'),
+      body: lines([
+        ['Offence', col(row, 'offence under')],
+        ['Summary', col(row, 'summary')],
+        ['Date of offence', col(row, 'date of offence')],
+        ['Penalty', col(row, 'penalty')],
+      ]),
       party,
       action: 'Modified penalty notice',
       location: null,
@@ -61,14 +74,14 @@ const prosecutions = (rows: Columns[]) =>
       title: `Prosecution: ${party}`,
       url: PAGE,
       publishedAt: latestDate(col(row, 'date of conviction')),
-      body: [
-        `Charges: ${col(row, 'charges')}`,
-        `Summary: ${col(row, 'summary')}`,
-        `Date of offence: ${col(row, 'date of offence')}`,
-        `Conviction: ${col(row, 'date of conviction')}`,
-        `Penalty: ${col(row, 'penalty')}`,
-        `Other orders: ${col(row, 'other costs')}`,
-      ].join('\n'),
+      body: lines([
+        ['Charges', col(row, 'charges')],
+        ['Summary', col(row, 'summary')],
+        ['Date of offence', col(row, 'date of offence')],
+        ['Conviction', col(row, 'date of conviction')],
+        ['Penalty', col(row, 'penalty')],
+        ['Other orders', col(row, 'other costs')],
+      ]),
       party,
       action: 'Prosecution',
       location: col(row, 'address') || null,
@@ -94,10 +107,7 @@ export const waEnforcement: Source = {
   jurisdiction: 'WA',
   homepage: PAGE,
   run: () =>
-    getText({ url: PAGE }).andThen(({ text }) =>
-      ResultAsync.fromPromise(
-        Promise.resolve().then(() => parseWaPage(text)),
-        (cause): SourceError => ({ type: 'parse', url: PAGE, message: String(cause) }),
-      ).map((records) => ({ type: 'changed' as const, records, cursor: null, next: null, raw: [{ name: 'environmental-enforcement.html', body: text }] })),
-    ),
+    getText({ url: PAGE })
+      .andThen(({ text }) => tryParse(PAGE, () => parseWaPage(text)))
+      .andThen((records) => changed({ records })),
 };

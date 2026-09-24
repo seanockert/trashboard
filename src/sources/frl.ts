@@ -1,5 +1,7 @@
-import { errAsync, okAsync, type ResultAsync } from 'neverthrow';
+import type { ResultAsync } from 'neverthrow';
 import { z } from 'zod';
+import { badPageState, changed, parseError, unchanged } from './common';
+import { daysAgo, newestOf } from './dates';
 import { getJson } from './http';
 import type { FetchOutcome, Source, SourceError } from './types';
 
@@ -50,20 +52,14 @@ const PageState = z.object({ since: z.string(), page: z.number(), newest: z.stri
 
 const fetchPage = ({ since, page, newestSoFar }: { since: string; page: number; newestSoFar: string | null }): ResultAsync<FetchOutcome, SourceError> => {
   const url = pageUrl({ since, skip: page * PAGE_SIZE });
-  return getJson({ url }).andThen(({ json, text }) => {
+  return getJson({ url }).andThen(({ json }) => {
     const parsed = Page.safeParse(json);
-    if (!parsed.success) return errAsync<FetchOutcome, SourceError>({ type: 'parse', url, message: parsed.error.message });
+    if (!parsed.success) return parseError(url, parsed.error.message);
     const titles = parsed.data.value;
-    if (page === 0 && titles.length === 0) return okAsync<FetchOutcome, SourceError>({ type: 'unchanged' });
-    const newest = [newestSoFar, ...titles.map((t) => t.asMadeRegisteredAt)].filter((d): d is string => d !== null).sort().at(-1) ?? null;
+    if (page === 0 && titles.length === 0) return unchanged();
+    const newest = newestOf([newestSoFar, ...titles.map((t) => t.asMadeRegisteredAt)]);
     const isLast = titles.length < PAGE_SIZE || page + 1 >= MAX_PAGES;
-    return okAsync<FetchOutcome, SourceError>({
-      type: 'changed',
-      records: titles.map(toItem),
-      cursor: newest ?? since,
-      raw: [{ name: `titles-${page}.json`, body: text }],
-      next: isLast ? null : { since, page: page + 1, newest },
-    });
+    return changed({ records: titles.map(toItem), cursor: newest ?? since, next: isLast ? null : { since, page: page + 1, newest } });
   });
 };
 
@@ -91,9 +87,9 @@ export const federalRegister: Source = {
   homepage: SITE,
   run: ({ cursor, now, page, since }) => {
     if (page === null) {
-      return fetchPage({ since: since ?? cursor ?? new Date(now.getTime() - FIRST_RUN_DAYS * 86_400_000).toISOString(), page: 0, newestSoFar: null });
+      return fetchPage({ since: since ?? cursor ?? daysAgo(now, FIRST_RUN_DAYS), page: 0, newestSoFar: null });
     }
     const state = PageState.safeParse(page);
-    return state.success ? fetchPage({ since: state.data.since, page: state.data.page, newestSoFar: state.data.newest }) : errAsync({ type: 'parse', url: API, message: 'The page state is not valid.' });
+    return state.success ? fetchPage({ since: state.data.since, page: state.data.page, newestSoFar: state.data.newest }) : badPageState(API);
   },
 };

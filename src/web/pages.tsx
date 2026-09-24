@@ -1,3 +1,4 @@
+import type { Child } from 'hono/jsx';
 import { Jurisdiction, type StoredItem, type Tracking, type TrackStatus } from '../items';
 import { LINES_OF_BUSINESS, OFFENCES, TOPICS } from '../jev/answers';
 import { PARTY_GROUPS } from '../parties';
@@ -7,6 +8,7 @@ import {
   LOB_LABELS,
   OFFENCE_LABELS,
   PAGE_SIZE,
+  brisbaneDay,
   snippet,
   TOPIC_LABELS,
   type ChangeRow,
@@ -52,7 +54,7 @@ const Select = <T extends string | number>({
   options: readonly (readonly [T, string])[];
   blank?: string | null;
 }) => (
-  <label>
+  <label class="stack-quarter">
     {label}
     <select name={name} onchange="this.form.submit()">
       {blank !== null && <option value="">{blank}</option>}
@@ -138,20 +140,20 @@ const Bookmark = ({ item, tracking, back }: { item: StoredItem; tracking: Tracki
     <summary title={tracking === undefined ? 'Bookmark' : 'Edit bookmark'} aria-label={tracking === undefined ? 'Bookmark' : 'Edit bookmark'}>
       <BookmarkIcon filled={tracking !== undefined} />
     </summary>
-    <form method="post" action="/track">
+    <form class="stack-half" method="post" action="/track">
       <input type="hidden" name="itemId" value={item.id} />
       <input type="hidden" name="back" value={`${back}#${anchor(item)}`} />
-      <div class="track-status">
+      <div class="inline-2x">
         {(['watching', 'acting'] as const).map((status) => (
           <label>
             <input type="radio" name="status" value={status} checked={(tracking?.status ?? 'watching') === status} /> {TRACK_LABELS[status]}
           </label>
         ))}
       </div>
-      <textarea name="note" rows={2} maxlength={500} placeholder="Note, for example: raised with ops, due 1 July">
+      <textarea name="note" aria-label="Note" rows={2} maxlength={500} placeholder="Note, for example: raised with ops, due 1 July">
         {tracking?.note ?? ''}
       </textarea>
-      <div class="track-actions">
+      <div class="inline-half">
         <button type="submit">Save</button>
         {tracking !== undefined && (
           <button type="submit" name="stop" value="1" class="secondary">
@@ -163,12 +165,11 @@ const Bookmark = ({ item, tracking, back }: { item: StoredItem; tracking: Tracki
   </details>
 );
 
-// The status and note of a bookmarked item, at the bottom of the card.
 // The AI summary if there is one, else the start of the source text.
 const ItemText = ({ item }: { item: StoredItem }) => {
   if (item.summary !== null)
     return (
-      <div class="summary" title="AI summary of the source text. Check the source before you act.">
+      <div class="summary stack-quarter" title="AI summary of the source text. Check the source before you act.">
         <p>{item.summary.what}</p>
         {item.summary.points.length > 0 && (
           <ul>
@@ -183,11 +184,12 @@ const ItemText = ({ item }: { item: StoredItem }) => {
   return text === '' ? null : <div class="body">{text}</div>;
 };
 
+// The status and note of a bookmarked item, at the bottom of the card.
 const TrackInfo = ({ tracking }: { tracking: Tracking | undefined }) =>
   tracking === undefined ? null : (
-    <div class="track">
-      <span class={`pill ${tracking.status}`}>{TRACK_LABELS[tracking.status]}</span>
-      {tracking.note !== '' && <span class="track-note">{tracking.note}</span>}
+    <div class="track inline">
+      <div class={`pill ${tracking.status}`}>{TRACK_LABELS[tracking.status]}</div>
+      {tracking.note !== '' && <div class="track-note">{tracking.note}</div>}
     </div>
   );
 
@@ -202,7 +204,7 @@ const Pager = ({ filters, matched }: { filters: Record<string, string | number |
   if (pages === 1) return null;
   const href = (page: number) => query({ ...filters, page });
   return (
-    <div class="pager">
+    <div class="pager inline-between">
       {current > 1 ? <a href={href(current - 1)}>Previous</a> : <div />}
       <div class="note">
         Page {current} of {pages}
@@ -212,14 +214,16 @@ const Pager = ({ filters, matched }: { filters: Record<string, string | number |
   );
 };
 
-export const LoginPage = ({ next, failed }: { next: string; failed: boolean }) => (
+export const LoginPage = ({ next, error }: { next: string; error: string | null }) => (
   <Layout title="Log in" path={null}>
-    <form class="login" method="post" action="/login">
-      <h1><img src="/assets/trashboard-icon-sm.png" height="48" width="48" /> Trashboard</h1>
+    <form class="login stack" method="post" action="/login">
+      <h1 class="inline"><img src="/assets/trashboard-icon-sm.png" height="48" width="48" alt="" /> Trashboard</h1>
       <div class="note">Enter the password to continue.</div>
-      {failed && <div class="error">The password is not correct.</div>}
+      {error !== null && <div class="error">{error}</div>}
       <input type="hidden" name="next" value={next} />
-      <input type="password" name="password" autocomplete="current-password" required autofocus />
+      <label class="stack-quarter">
+        Password <input type="password" name="password" autocomplete="current-password" required autofocus />
+      </label>
       <button type="submit">Log in</button>
     </form>
   </Layout>
@@ -228,28 +232,65 @@ export const LoginPage = ({ next, failed }: { next: string; failed: boolean }) =
 export type LabelMap = ReadonlyMap<string, boolean>;
 
 const GROUP_LABELS: Record<string, string> = Object.fromEntries(PARTY_GROUPS.map((g) => [g.id, g.label]));
+const GROUP_OPTIONS = PARTY_GROUPS.map((g) => [g.id, g.label] as const);
 
-const today = () => new Date().toISOString().slice(0, 10);
+const KIND_LABELS: Record<StoredItem['kind'], string> = { regulatory: 'Regulatory', enforcement: 'Enforcement' };
+
+// "1 item", "2 items".
+const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
+
+type GroupRow = ReturnType<typeof groupTable>[number];
+
+// Enforcement counts for each company group. `name` gives the first cell.
+const GroupTable = ({ rows, name }: { rows: GroupRow[]; name: (group: GroupRow) => Child }) => (
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Company group</th>
+          <th class="num">Records</th>
+          <th class="num">Harm or serious</th>
+          <th class="num">Known penalties</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((g) => (
+          <tr class={g.id === 'jjr' ? 'self' : ''}>
+            <td>{name(g)}</td>
+            <td class="num">{g.count}</td>
+            <td class="num">{g.serious}</td>
+            <td class="num">{g.penaltyTotal > 0 ? aud(g.penaltyTotal) : '-'}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+);
+
+const today = () => brisbaneDay(new Date());
 
 // The dates that the source states. A date in the past has a past-tense label.
-const DateTags = ({ item }: { item: StoredItem }) => (
-  <>
-    {item.closesOn !== null && (
-      <div class={`tag${item.closesOn >= today() ? ' warn' : ''}`}>
-        {item.closesOn >= today() ? 'Submissions close' : 'Submissions closed'} {date(item.closesOn)}
-      </div>
-    )}
-    {item.startsOn !== null && (
-      <div class={`tag${item.startsOn >= today() ? ' warn' : ''}`}>
-        {item.startsOn >= today() ? 'Starts' : 'Started'} {date(item.startsOn)}
-      </div>
-    )}
-  </>
-);
+const DateTags = ({ item }: { item: StoredItem }) => {
+  const now = today();
+  return (
+    <>
+      {item.closesOn !== null && (
+        <div class={`tag${item.closesOn >= now ? ' warn' : ''}`}>
+          {item.closesOn >= now ? 'Submissions close' : 'Submissions closed'} {date(item.closesOn)}
+        </div>
+      )}
+      {item.startsOn !== null && (
+        <div class={`tag${item.startsOn >= now ? ' warn' : ''}`}>
+          {item.startsOn >= now ? 'Starts' : 'Started'} {date(item.startsOn)}
+        </div>
+      )}
+    </>
+  );
+};
 
 // The user's rating, to measure the priority. A click on the current rating removes it.
 const LabelForm = ({ item, label, back }: { item: StoredItem; label: boolean | undefined; back: string }) => (
-  <form class="label" method="post" action="/label" title="Your rating measures how well the priority works. See Priority check in the settings menu.">
+  <form class="label inline-half" method="post" action="/label" title="Your rating measures how well the priority works. See Priority check in the settings menu.">
     <input type="hidden" name="itemId" value={item.id} />
     <input type="hidden" name="back" value={`${back}#${anchor(item)}`} />
     <div class="note">Useful to you?</div>
@@ -266,9 +307,9 @@ const ChangeCard = ({ row, filters, tracking, label }: { row: ChangeRow; filters
   const href = (key: 'lob' | 'topic' | 'need' | 'company', value: string) => query({ ...filters, page: undefined, [key]: filters[key] === value ? undefined : value });
   const group = row.item.partyGroup;
   return (
-    <div class="card" id={anchor(row.item)}>
+    <div class="card stack-half" id={anchor(row.item)}>
       <Bookmark item={row.item} tracking={tracking.get(row.item.id)} back={`/changes${query(filters)}`} />
-      <div class="meta">
+      <div class="meta inline-wrap">
         <Priority row={row} />
         <div>{row.item.jurisdiction}</div>
         <div>{date(row.item.publishedAt)}</div>
@@ -276,7 +317,7 @@ const ChangeCard = ({ row, filters, tracking, label }: { row: ChangeRow; filters
       </div>
       <Title item={row.item} text={row.item.title} />
       <ItemText item={row.item} />
-      <div class="tags">
+      <div class="tags inline-wrap">
         {group !== null && <TagLink href={href('company', group)} on={filters.company === group} warn={group === 'jjr'} text={`Names ${GROUP_LABELS[group] ?? group}`} />}
         <DateTags item={row.item} />
         {row.answers.actionRequired.noul >= FLAG_MIN && <TagLink href={href('need', 'action')} on={filters.need === 'action'} warn text="Action may be needed" />}
@@ -314,7 +355,7 @@ export const ChangesPage = ({
       <p class="sub">
         New laws, consultations and regulator news that can affect the business. Items that name JJ Richards are first, then the most important. <a href="/about#priority">How priority works</a>
       </p>
-      <form class="filters" method="get">
+      <form class="filters inline-wrap" method="get">
         <Select name="days" label="Period" value={filters.days} options={CHANGES_PERIODS} blank={null} />
         <Select name="jurisdiction" label="Jurisdiction" value={filters.jurisdiction} options={JURISDICTIONS} />
         <Select name="lob" label="Part of business" value={filters.lob} options={LINES_OF_BUSINESS.map((key) => [key, LOB_LABELS[key]] as const)} />
@@ -326,11 +367,11 @@ export const ChangesPage = ({
           options={[['action', 'Action may be needed'] as const, ['submissions', 'Submissions invited'] as const]}
           blank="All items"
         />
-        <Select name="company" label="Company" value={filters.company} options={[...PARTY_GROUPS.map((g) => [g.id, g.label] as const), ['any', 'Any listed company'] as const]} />
+        <Select name="company" label="Company" value={filters.company} options={[...GROUP_OPTIONS, ['any', 'Any listed company'] as const]} />
         {filters.all === '1' && <input type="hidden" name="all" value="1" />}
         <NoScriptApply />
       </form>
-      <p class="count">{matched === 1 ? '1 item' : `${matched} items`}</p>
+      <p class="count">{plural(matched, 'item')}</p>
       {rows.length === 0 ? <div class="empty">No items match these filters.</div> : rows.map((row) => <ChangeCard row={row} filters={filters} tracking={tracking} label={labels.get(row.item.id)} />)}
       <Pager filters={filters} matched={matched} />
       <p class="note">
@@ -341,9 +382,9 @@ export const ChangesPage = ({
 };
 
 const EnforcementCard = ({ row, filters, tracking }: { row: EnforcementRow; filters: EnforcementFilters; tracking: TrackingMap }) => (
-  <div class="card" id={anchor(row.item)}>
+  <div class="card stack-half" id={anchor(row.item)}>
     <Bookmark item={row.item} tracking={tracking.get(row.item.id)} back={`/enforcement${query(filters)}`} />
-    <div class="meta">
+    <div class="meta inline-wrap">
       <div>{row.item.jurisdiction}</div>
       <div>{date(row.item.publishedAt)}</div>
       <div>{row.item.action}</div>
@@ -351,7 +392,7 @@ const EnforcementCard = ({ row, filters, tracking }: { row: EnforcementRow; filt
     </div>
     <Title item={row.item} text={row.item.party ?? row.item.title} />
     <ItemText item={row.item} />
-    <div class="tags">
+    <div class="tags inline-wrap">
       <TagLink
         href={query({ ...filters, page: undefined, offence: filters.offence === row.answers.offence.choice ? undefined : row.answers.offence.choice })}
         on={filters.offence === row.answers.offence.choice}
@@ -405,7 +446,7 @@ const PenaltyTable = ({ rows, filters }: { rows: PenaltyBenchmark[]; filters: En
         </table>
       </div>
       <p class="note">
-        Amounts that the sources state, for the filters above. The QLD register states no amounts. A median of fewer than {BENCHMARK_MIN} penalties is not shown.
+        Amounts that the sources state, for the period, jurisdiction and industry above. The QLD register states no amounts. A median of fewer than {BENCHMARK_MIN} penalties is not shown.
       </p>
     </>
   );
@@ -414,14 +455,14 @@ export const EnforcementPage = ({ model, filters, tracking }: { model: Enforceme
   <Layout title="Enforcement" path="/enforcement">
     <h1>Enforcement</h1>
     <p class="sub">Fines, orders and prosecutions against companies, from the public registers.</p>
-    <form class="filters" method="get">
+    <form class="filters inline-wrap" method="get">
       <Select name="days" label="Period" value={filters.days} options={ENFORCEMENT_PERIODS} blank={null} />
       <Select name="jurisdiction" label="Jurisdiction" value={filters.jurisdiction} options={JURISDICTIONS} />
       <Select
         name="group"
         label="Company"
         value={filters.group}
-        options={[...PARTY_GROUPS.map((g) => [g.id, g.label] as const), ['other', 'Other companies'] as const]}
+        options={[...GROUP_OPTIONS, ['other', 'Other companies'] as const]}
       />
       <Select
         name="offence"
@@ -439,33 +480,13 @@ export const EnforcementPage = ({ model, filters, tracking }: { model: Enforceme
       <NoScriptApply />
     </form>
 
-    <div class="scroll">
-      <table>
-        <thead>
-          <tr>
-            <th>Company group</th>
-            <th class="num">Records</th>
-            <th class="num">Harm or serious</th>
-            <th class="num">Known penalties</th>
-          </tr>
-        </thead>
-        <tbody>
-          {model.groups.map((g) => (
-            <tr class={g.id === 'jjr' ? 'self' : ''}>
-              <td>
-                <a href={`?${new URLSearchParams({ ...(filters.jurisdiction ? { jurisdiction: filters.jurisdiction } : {}), days: String(filters.days), group: g.id })}`}>{g.label}</a>
-              </td>
-              <td class="num">{g.count}</td>
-              <td class="num">{g.serious}</td>
-              <td class="num">{g.penaltyTotal > 0 ? aud(g.penaltyTotal) : '-'}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <GroupTable
+      rows={model.groups}
+      name={(g) => <a href={query({ ...filters, page: undefined, offence: undefined, group: g.id })}>{g.id === 'other' && filters.industry === 'all' ? 'Other companies' : g.label}</a>}
+    />
     <p class="note">Counts depend on which registers publish data. Compare groups in one jurisdiction. Records that name a person are not stored.</p>
     <PenaltyTable rows={model.penalties} filters={filters} />
-    <p class="count">{model.matched === 1 ? '1 record' : `${model.matched} records`}</p>
+    <p class="count">{plural(model.matched, 'record')}</p>
     {model.list.length === 0 ? <div class="empty">No records match these filters.</div> : model.list.map((row) => <EnforcementCard row={row} filters={filters} tracking={tracking} />)}
     <Pager filters={filters} matched={model.matched} />
   </Layout>
@@ -494,20 +515,20 @@ export const SearchPage = ({ query, result, tracking }: { query: string; result:
       <>
         <h1>Results for “{query}”</h1>
         <p class="sub">The AI model checks each match and shows only the items that help answer the search. The best are first.</p>
-        <p class="count">{result.hits.length === 1 ? '1 result' : `${result.hits.length} results`}</p>
+        <p class="count">{plural(result.hits.length, 'result')}</p>
         {result.hits.length === 0 ? (
           <div class="empty">No stored item answers this. Try other words.</div>
         ) : (
           result.hits.map((hit) => (
-            <div class="card" id={anchor(hit.item)}>
+            <div class="card stack-half" id={anchor(hit.item)}>
               <Bookmark item={hit.item} tracking={tracking.get(hit.item.id)} back={`/search?${new URLSearchParams({ q: query })}`} />
-              <div class="meta">
+              <div class="meta inline-wrap">
                 <div class={`prio ${hit.score >= STRONG_MATCH ? 'high' : 'medium'}`} title="How sure the AI model is that this item helps answer the search.">
                   {hit.score >= STRONG_MATCH ? 'Strong match' : 'Possible match'}
                 </div>
                 <div>{hit.item.jurisdiction}</div>
                 <div>{date(hit.item.publishedAt)}</div>
-                <div>{hit.item.kind === 'enforcement' ? 'Enforcement' : 'Regulatory'}</div>
+                <div>{KIND_LABELS[hit.item.kind]}</div>
               </div>
               <Title item={hit.item} text={hit.item.party ?? hit.item.title} />
               <ItemText item={hit.item} />
@@ -522,12 +543,12 @@ export const SearchPage = ({ query, result, tracking }: { query: string; result:
 
 const TrackedList = ({ rows }: { rows: { item: StoredItem; tracking: Tracking }[] }) =>
   rows.map(({ item, tracking }) => (
-    <div class="card" id={anchor(item)}>
+    <div class="card stack-half" id={anchor(item)}>
       <Bookmark item={item} tracking={tracking} back="/tracked" />
-      <div class="meta">
+      <div class="meta inline-wrap">
         <div>{item.jurisdiction}</div>
         <div>{date(item.publishedAt)}</div>
-        <div>{item.kind === 'enforcement' ? 'Enforcement' : 'Regulatory'}</div>
+        <div>{KIND_LABELS[item.kind]}</div>
       </div>
       <Title item={item} text={item.party ?? item.title} />
       <TrackInfo tracking={tracking} />
@@ -573,7 +594,7 @@ export const SourcesPage = ({ rows, pending }: { rows: SourceRow[]; pending: num
   <Layout title="Sources" path="/sources">
     <h1>Sources</h1>
     <p class="sub">Each source runs one time each day at 05:00 Brisbane time. {pending} items wait for tags.</p>
-    <div class="tags" style="margin-bottom:16px">
+    <div class="inline-half inline-wrap">
       <form method="post" action="/sources/run">
         <button type="submit">Run all sources now</button>
       </form>
@@ -607,7 +628,7 @@ export const SourcesPage = ({ rows, pending }: { rows: SourceRow[]; pending: num
                 </a>
               </td>
               <td>{row.kind}</td>
-              <td>{row.lastRun?.slice(0, 16).replace('T', ' ') ?? 'Never'}</td>
+              <td>{row.lastRun === null ? 'Never' : new Date(row.lastRun).toLocaleString('en-AU', { timeZone: 'Australia/Brisbane', dateStyle: 'medium', timeStyle: 'short' })}</td>
               <td class={row.status === 'error' ? 'error' : ''} title={row.error ?? ''}>
                 {row.status ?? '-'}
                 {row.error !== null && <div class="note">{row.error.slice(0, 160)}</div>}
@@ -626,7 +647,7 @@ export const SourcesPage = ({ rows, pending }: { rows: SourceRow[]; pending: num
 
 export const AboutPage = ({ sources }: { sources: number }) => (
   <Layout title="About" path="/about">
-    <div class="about">
+    <div class="about stack">
       <h1>About Trashboard</h1>
       <p class="sub">Waste industry law and enforcement news, filtered and ranked for you.</p>
 
@@ -743,11 +764,11 @@ export const DeadlinesPage = ({ entries, days }: { entries: DateEntry[]; days: n
   <Layout title="Deadlines" path="/deadlines">
     <h1>Deadlines</h1>
     <p class="sub">Submission close dates and start dates, from the text of relevant regulatory items. Soonest first.</p>
-    <form class="filters" method="get">
+    <form class="filters inline-wrap" method="get">
       <Select name="days" label="Period" value={days} options={DEADLINE_PERIODS} blank={null} />
       <NoScriptApply />
     </form>
-    <p class="count">{entries.length === 1 ? '1 date' : `${entries.length} dates`}</p>
+    <p class="count">{plural(entries.length, 'date')}</p>
     {entries.length === 0 ? <div class="empty">No dates in this period.</div> : <DateTable entries={entries} />}
     <p class="note">An AI model selects each date from the dates in the source text. Check the source before you act. A date that the source does not state is not shown.</p>
   </Layout>
@@ -762,7 +783,7 @@ const LABELS_MIN = 20;
 
 export const LabelsPage = ({ stats }: { stats: BandStat[] }) => (
   <Layout title="Priority check" path="/labels">
-    <div class="about">
+    <div class="about stack">
       <h1>Priority check</h1>
       <p class="sub">How well the priority matches your judgment. Click "Useful to you?" on the cards in Regulatory changes.</p>
       <div class="scroll">
@@ -831,7 +852,7 @@ export type ReportModel = {
   quarter: string;
   quarters: string[];
   label: string;
-  counts: { relevant: number; high: number; action: number; submissions: number };
+  counts: { high: number; action: number; submissions: number };
   changes: ChangeRow[];
   dates: DateEntry[];
   named: StoredItem[];
@@ -849,9 +870,11 @@ const Stat = ({ value, text }: { value: number; text: string }) => (
 export const ReportPage = ({ model }: { model: ReportModel }) => {
   const jjr = model.groups.find((g) => g.id === 'jjr');
   const competitors = model.groups.filter((g) => g.id !== 'jjr' && g.id !== 'other');
+  const groupRows = [...(jjr !== undefined && jjr.count > 0 ? [jjr] : []), ...competitors];
+  const others = model.groups.find((g) => g.id === 'other')?.count ?? 0;
   return (
     <Layout title={`Report ${model.label}`} path="/report">
-      <form class="filters no-print" method="get">
+      <form class="filters inline-wrap no-print" method="get">
         <Select name="quarter" label="Quarter" value={model.quarter} options={model.quarters.map((q) => [q, q] as const)} blank={null} />
         <NoScriptApply />
         <button type="button" onclick="window.print()">
@@ -872,7 +895,7 @@ export const ReportPage = ({ model }: { model: ReportModel }) => {
       {model.changes.length === 0 ? (
         <div class="empty">No high priority changes in this quarter.</div>
       ) : (
-        <ul class="report-list">
+        <ul class="stack">
           {model.changes.map((row) => (
             <li>
               <Title item={row.item} text={row.item.title} />
@@ -891,34 +914,10 @@ export const ReportPage = ({ model }: { model: ReportModel }) => {
 
       <h2>Enforcement against JJ Richards and competitors</h2>
       {jjr === undefined || jjr.count === 0 ? <p>No enforcement records against JJ Richards in the sources for this quarter.</p> : null}
-      {competitors.length === 0 ? (
-        <p>No enforcement records against the listed competitors in this quarter.</p>
-      ) : (
-        <div class="scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Company group</th>
-                <th class="num">Records</th>
-                <th class="num">Harm or serious</th>
-                <th class="num">Known penalties</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[...(jjr !== undefined && jjr.count > 0 ? [jjr] : []), ...competitors].map((g) => (
-                <tr class={g.id === 'jjr' ? 'self' : ''}>
-                  <td>{g.label}</td>
-                  <td class="num">{g.count}</td>
-                  <td class="num">{g.serious}</td>
-                  <td class="num">{g.penaltyTotal > 0 ? aud(g.penaltyTotal) : '-'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {competitors.length === 0 && <p>No enforcement records against the listed competitors in this quarter.</p>}
+      {groupRows.length > 0 && <GroupTable rows={groupRows} name={(g) => g.label} />}
       {model.named.length > 0 && (
-        <ul class="report-list">
+        <ul class="stack">
           {model.named.map((item) => (
             <li>
               <Title item={item} text={item.party ?? item.title} />
@@ -930,15 +929,13 @@ export const ReportPage = ({ model }: { model: ReportModel }) => {
           ))}
         </ul>
       )}
-      {(model.groups.find((g) => g.id === 'other')?.count ?? 0) > 0 && (
-        <p class="note">Other waste operators had {model.groups.find((g) => g.id === 'other')?.count} enforcement records in this quarter.</p>
-      )}
+      {others > 0 && <p class="note">Other waste operators had {others} enforcement records in this quarter.</p>}
 
       <h2>Open actions</h2>
       {model.acting.length === 0 ? (
         <p>No bookmarked items with the status Acting.</p>
       ) : (
-        <ul class="report-list">
+        <ul class="stack">
           {model.acting.map(({ item, tracking }) => (
             <li>
               <Title item={item} text={item.party ?? item.title} />

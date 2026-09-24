@@ -22,9 +22,10 @@ import { makeClient } from '../jev/tag';
 import { retagStale, scheduleAll, summariseStale } from '../pipeline';
 import { search } from '../search';
 import { SOURCES } from '../sources';
-import { checkPassword, endSession, requireSession, startSession } from './auth';
+import { checkPassword, endSession, requireSession, safeNext, startSession } from './auth';
 import {
   bandStats,
+  brisbaneDay,
   ChangesFilters,
   changesFlags,
   dateEntries,
@@ -59,12 +60,11 @@ export const app = new Hono<{ Bindings: Env }>();
 
 app.use('*', secureHeaders());
 
-// Only a local path is a safe place to send the user after login.
-const safeNext = (next: unknown) => (typeof next === 'string' && next.startsWith('/') && !next.startsWith('//') ? next : '/changes');
-
-app.get('/login', (c) => c.html(<LoginPage next={safeNext(c.req.query('next'))} failed={c.req.query('failed') === '1'} />));
+app.get('/login', (c) => c.html(<LoginPage next={safeNext(c.req.query('next'))} error={c.req.query('failed') === '1' ? 'The password is not correct.' : null} />));
 
 app.post('/login', async (c) => {
+  const { success: allowed } = await c.env.LOGIN_LIMIT.limit({ key: c.req.header('cf-connecting-ip') ?? 'unknown' });
+  if (!allowed) return c.html(<LoginPage next="/changes" error="Too many attempts. Wait one minute, then try again." />, 429);
   const form = z.object({ password: z.string(), next: z.string().optional() }).safeParse(await c.req.parseBody());
   const next = safeNext(form.success ? form.data.next : undefined);
   if (!form.success || !(await checkPassword({ env: c.env, password: form.data.password }))) {
@@ -142,7 +142,6 @@ app.post('/track', async (c) => {
   return c.redirect(safeNext(back));
 });
 
-const isoDay = (date: Date) => date.toISOString().slice(0, 10);
 const addDays = (date: Date, days: number) => new Date(date.getTime() + days * 86_400_000);
 
 const DeadlineFilters = z.object({ days: z.coerce.number().pipe(z.union(DEADLINE_PERIODS.map(([d]) => z.literal(d)))).catch(90) });
@@ -150,7 +149,7 @@ const DeadlineFilters = z.object({ days: z.coerce.number().pipe(z.union(DEADLINE
 app.get('/deadlines', async (c) => {
   const { days } = DeadlineFilters.parse(c.req.query());
   const now = new Date();
-  const range = { from: isoDay(now), to: isoDay(addDays(now, days)) };
+  const range = { from: brisbaneDay(now), to: brisbaneDay(addDays(now, days)) };
   const rows = toChangeRows(await upcomingDates(c.env.DB)({ version: TAG_VERSION, ...range }));
   return c.html(<DeadlinesPage entries={dateEntries({ rows, ...range })} days={days} />);
 });
@@ -176,7 +175,7 @@ app.get('/report', async (c) => {
   const asked = Quarter.safeParse(c.req.query('quarter'));
   const quarter = asked.success && quarters.includes(asked.data) ? asked.data : quarterOf(now);
   const { from, to, label } = quarterRange(quarter);
-  const dateRange = { from: isoDay(now), to: isoDay(addDays(now, REPORT_DATE_DAYS)) };
+  const dateRange = { from: brisbaneDay(now), to: brisbaneDay(addDays(now, REPORT_DATE_DAYS)) };
   const [data, dated, tracked] = await Promise.all([
     reportData(c.env.DB)({ version: TAG_VERSION, from, to }),
     upcomingDates(c.env.DB)({ version: TAG_VERSION, ...dateRange }),

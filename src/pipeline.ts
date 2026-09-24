@@ -2,8 +2,8 @@ import { z } from 'zod';
 import { match } from 'ts-pattern';
 import { readSecrets } from './env';
 import { BODY_MAX, NewItem, type StoredItem } from './items';
-import { isCompanyName, mentionedGroup } from './parties';
-import { deleteParties, getCursor, getItems, recordRun, saveAnswers, saveDetail, saveSummary, unsummarisedIds, untaggedIds, upsertItems } from './db';
+import { groupOf, isCompanyName, PARTIES_VERSION } from './parties';
+import { deleteParties, getCursor, getItems, recordRun, saveAnswers, saveDetail, saveGroups, saveSummary, staleGroupIds, unsummarisedIds, untaggedIds, upsertItems } from './db';
 import { makeClient, tagItem, USD_PER_MILLION_INPUT_TOKENS } from './jev/tag';
 import { TAG_VERSION } from './jev/questions';
 import { SOURCES, sourceById } from './sources';
@@ -19,8 +19,12 @@ export const IngestMessage = z.object({ sourceId: z.string(), page: z.unknown().
 export const ItemMessage = z.object({ itemIds: z.array(z.string()).min(1), attempt: z.number().int().default(1) });
 // Items that were tagged before, but have no current summary. Uses the item queue too.
 export const SummaryMessage = z.object({ summariseIds: z.array(z.string()).min(1) });
+// Items with a group from an older alias list. Uses the item queue too.
+export const RegroupMessage = z.object({ regroupIds: z.array(z.string()).min(1) });
 
 export const ITEMS_PER_MESSAGE = 10;
+// A regroup needs no requests, thus a message can hold more items.
+const REGROUP_PER_MESSAGE = 50;
 export const MAX_ATTEMPTS = 5;
 
 const describeError = (error: SourceError) =>
@@ -53,11 +57,16 @@ export const scheduleAll = async (env: Env, since: string | null = null) => {
   await env.INGEST_QUEUE.sendBatch(SOURCES.map((source) => ({ body: { sourceId: source.id, page: null, since } })));
 };
 
-export const sendItemMessages = async ({ env, itemIds, attempt = 1, delaySeconds = 0 }: { env: Env; itemIds: string[]; attempt?: number; delaySeconds?: number }) => {
-  const messages = chunks(itemIds, ITEMS_PER_MESSAGE).map((group) => ({ body: { itemIds: group, attempt }, delaySeconds }));
-  // A send batch holds at most 100 messages.
+// A send batch holds at most 100 messages.
+const sendAll = async (env: Env, messages: MessageSendRequest[]) => {
   await Promise.all(chunks(messages, 100).map((batch) => env.ITEM_QUEUE.sendBatch(batch)));
 };
+
+export const sendItemMessages = ({ env, itemIds, attempt = 1, delaySeconds = 0 }: { env: Env; itemIds: string[]; attempt?: number; delaySeconds?: number }) =>
+  sendAll(
+    env,
+    chunks(itemIds, ITEMS_PER_MESSAGE).map((group) => ({ body: { itemIds: group, attempt }, delaySeconds })),
+  );
 
 // Runs one page of one source. The next page, if any, goes back on the queue.
 export const ingestPage = async ({ env, sourceId, page, since }: { env: Env; sourceId: string; page: unknown; since: string | null }) => {
@@ -82,16 +91,13 @@ export const ingestPage = async ({ env, sourceId, page, since }: { env: Env; sou
     return;
   }
 
-  const { records, raw, cursor: nextCursor, next } = outcome.value;
-  const day = startedAt.toISOString().slice(0, 10);
-  await Promise.all(raw.map((file) => env.RAW.put(`${sourceId}/${day}/${file.name}`, file.body)));
+  const { records, cursor: nextCursor, next } = outcome.value;
 
   const checked = checkRecords(records);
   const changedIds = await upsertItems(env.DB)({ sourceId, items: checked.items, now: startedAt });
   await sendItemMessages({ env, itemIds: changedIds });
 
   const isLast = next === null;
-  if (!isLast) await env.INGEST_QUEUE.send({ sourceId, page: next, since });
   // A stricter rule for personal information also applies to records stored before it.
   const purged = isLast && source.kind === 'enforcement' ? await deleteParties(env.DB)({ sourceId, keep: isCompanyName }) : 0;
 
@@ -110,10 +116,12 @@ export const ingestPage = async ({ env, sourceId, page, since }: { env: Env; sou
     error,
     cursor: isLast ? nextCursor : null,
   });
+  // The next page goes on the queue last. A retry of this page then cannot start a second chain.
+  if (!isLast) await env.INGEST_QUEUE.send({ sourceId, page: next, since });
 };
 
 // Also finds items with an old tag version, for example after a question changes.
-// `minAgeHours` skips items that a run in progress sent to the queue already.
+// `minAgeHours` skips new items that a run in progress sent to the queue already. It does not skip changed items.
 export const retagStale = async ({ env, limit, minAgeHours }: { env: Env; limit: number; minAgeHours: number }) => {
   const ids = await untaggedIds(env.DB)({ version: TAG_VERSION, limit, seenBefore: new Date(Date.now() - minAgeHours * 3_600_000) });
   await sendItemMessages({ env, itemIds: ids });
@@ -132,8 +140,9 @@ const withDetail = async ({ env, item, required }: { env: Env; item: StoredItem;
   }
   if (page.isErr()) throw new Error(`Detail fetch failed for ${item.id}: ${describeError(page.error)}`);
   const body = extract(page.value.text).slice(0, BODY_MAX);
-  await saveDetail(env.DB)({ itemId: item.id, body, now: new Date() });
-  return { ...item, body, detailFetchedAt: new Date().toISOString() };
+  const partyGroup = groupOf({ ...item, body });
+  await saveDetail(env.DB)({ itemId: item.id, contentHash: item.contentHash, body, group: partyGroup, now: new Date() });
+  return { ...item, body, partyGroup, detailFetchedAt: new Date().toISOString() };
 };
 
 // Makes summaries for the items that need one. A failed request does not
@@ -145,7 +154,7 @@ const summariseItems = async ({ env, items }: { env: Env; items: StoredItem[] })
   const results = await Promise.allSettled(
     todo.map(async (item) => {
       const { summary, neurons } = await summarise({ ai: env.AI, item });
-      await saveSummary(env.DB)({ itemId: item.id, summary, version: SUMMARY_VERSION });
+      await saveSummary(env.DB)({ itemId: item.id, contentHash: item.contentHash, summary, version: SUMMARY_VERSION });
       return { usable: summary !== null, neurons };
     }),
   );
@@ -166,9 +175,25 @@ const summariseItems = async ({ env, items }: { env: Env; items: StoredItem[] })
 
 export const summariseStale = async ({ env, limit }: { env: Env; limit: number }) => {
   const ids = await unsummarisedIds(env.DB)({ tagVersion: TAG_VERSION, version: SUMMARY_VERSION, limit });
-  const messages = chunks(ids, ITEMS_PER_MESSAGE).map((group) => ({ body: { summariseIds: group } }));
-  await Promise.all(chunks(messages, 100).map((batch) => env.ITEM_QUEUE.sendBatch(batch)));
+  await sendAll(
+    env,
+    chunks(ids, ITEMS_PER_MESSAGE).map((group) => ({ body: { summariseIds: group } })),
+  );
   return ids.length;
+};
+
+export const regroupStale = async ({ env, limit }: { env: Env; limit: number }) => {
+  const ids = await staleGroupIds(env.DB)({ version: PARTIES_VERSION, limit });
+  await sendAll(
+    env,
+    chunks(ids, REGROUP_PER_MESSAGE).map((group) => ({ body: { regroupIds: group } })),
+  );
+  return ids.length;
+};
+
+export const handleRegroupMessage = async ({ env, message }: { env: Env; message: z.infer<typeof RegroupMessage> }) => {
+  const items = await getItems(env.DB)(message.regroupIds);
+  await saveGroups(env.DB)({ groups: items.map((item) => ({ itemId: item.id, group: groupOf(item) })), version: PARTIES_VERSION });
 };
 
 export const handleSummaryMessage = async ({ env, message }: { env: Env; message: z.infer<typeof SummaryMessage> }) =>
@@ -187,14 +212,16 @@ export const processItems = async ({ env, itemIds, detailRequired }: { env: Env;
 
   const results = await Promise.all(ready.map(tagItem(client)));
   const now = new Date();
-  await Promise.all(
-    results.flatMap((result, i) => {
-      const item = ready[i];
-      return result.isOk() && item !== undefined ? [saveAnswers(env.DB)({ ...result.value, version: TAG_VERSION, now, mentioned: mentionedGroup(item) })] : [];
-    }),
-  );
+  // A failed save sends only that item back to the queue, not the whole message.
+  const tagged = results.flatMap((result, i) => {
+    const item = ready[i];
+    return result.isOk() && item !== undefined ? [{ item, tags: result.value }] : [];
+  });
+  const saves = await Promise.allSettled(tagged.map(({ item, tags }) => saveAnswers(env.DB)({ ...tags, contentHash: item.contentHash, version: TAG_VERSION, now })));
+  const saveFailures = saves.flatMap((save, i) => (save.status === 'rejected' ? [{ itemId: tagged[i]?.item.id ?? '', cause: save.reason }] : []));
+  saveFailures.forEach((failure) => console.error(JSON.stringify({ event: 'save_failed', itemId: failure.itemId, error: String(failure.cause) })));
   const tagFailures = results.flatMap((result) => (result.isErr() ? [result.error] : []));
-  const failedIds = new Set(tagFailures.map((failure) => failure.itemId));
+  const failedIds = new Set([...tagFailures, ...saveFailures].map((failure) => failure.itemId));
   await summariseItems({ env, items: ready.filter((item) => !failedIds.has(item.id)) });
   tagFailures.forEach((failure) => console.error(JSON.stringify({ event: 'tag_failed', itemId: failure.itemId, error: String(failure.cause) })));
   const inputTokens = results.reduce((sum, result) => sum + (result.isOk() ? result.value.inputTokens : 0), 0);
@@ -202,12 +229,12 @@ export const processItems = async ({ env, itemIds, detailRequired }: { env: Env;
     JSON.stringify({
       event: 'tag_batch',
       tagged: results.length - tagFailures.length,
-      failed: tagFailures.length + detailFailures.length,
+      failed: tagFailures.length + saveFailures.length + detailFailures.length,
       inputTokens,
       costUsd: (inputTokens * USD_PER_MILLION_INPUT_TOKENS) / 1e6,
     }),
   );
-  return [...detailFailures, ...tagFailures.map((failure) => failure.itemId)];
+  return [...detailFailures, ...failedIds];
 };
 
 // Only the failed IDs go back on the queue, so that a retry does not pay for

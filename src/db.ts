@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { Jurisdiction, TrackStatus, type NewItem, type StoredItem, type Tracking } from './items';
-import { findPartyGroup } from './parties';
+import { groupOf, PARTIES_VERSION } from './parties';
 import { flagSql, IS_RELEVANT_SQL, IS_SERIOUS_SQL, IS_WASTE_OPERATOR_SQL, OFFENCE_SQL, PRIORITY_BAND_SQL, PRIORITY_HIGH, PRIORITY_SQL, type FlagKey } from './rank';
 import { NEEDS_SUMMARY_SQL, Summary } from './summary';
 
@@ -13,11 +13,11 @@ export const itemId = ({ sourceId, externalId }: { sourceId: string; externalId:
 
 const enforcementFields = (item: NewItem) =>
   item.kind === 'enforcement'
-    ? { party: item.party, partyGroup: findPartyGroup(item.party), action: item.action, location: item.location, penaltyAud: item.penaltyAud, wasteActivity: item.wasteActivity }
-    : { party: null, partyGroup: null, action: null, location: null, penaltyAud: null, wasteActivity: false };
+    ? { party: item.party, action: item.action, location: item.location, penaltyAud: item.penaltyAud, wasteActivity: item.wasteActivity }
+    : { party: null, action: null, location: null, penaltyAud: null, wasteActivity: false };
 
-// Inserts new items and updates changed ones. A changed item loses its tags
-// and its summary, thus the next steps read the new text. Returns the IDs that need tags.
+// Inserts new items and updates changed ones. A changed item loses its tags,
+// its summary and the values that Jev selected, thus the next steps read the new text. Returns the IDs that need tags.
 export const upsertItems =
   (db: D1Database) =>
   async ({ sourceId, items, now }: { sourceId: string; items: NewItem[]; now: Date }): Promise<string[]> => {
@@ -28,14 +28,14 @@ export const upsertItems =
       const extra = enforcementFields(item);
       return db
         .prepare(
-          `INSERT INTO items (id, source_id, kind, jurisdiction, title, url, published_at, body, party, party_group, action, location, penalty_aud, content_hash, first_seen_at, detail_url, waste_activity)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+          `INSERT INTO items (id, source_id, kind, jurisdiction, title, url, published_at, body, party, party_group, action, location, penalty_source_aud, content_hash, first_seen_at, detail_url, waste_activity, group_version)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
            ON CONFLICT (id) DO UPDATE SET
              title = excluded.title, url = excluded.url, published_at = excluded.published_at, body = excluded.body,
              detail_url = excluded.detail_url, detail_fetched_at = NULL,
-             party = excluded.party, party_group = excluded.party_group, action = excluded.action, location = excluded.location,
-             penalty_aud = excluded.penalty_aud, waste_activity = excluded.waste_activity, content_hash = excluded.content_hash, tag_version = NULL, tagged_at = NULL, answers = NULL,
-             summary = NULL, summary_version = NULL
+             party = excluded.party, party_group = excluded.party_group, group_version = excluded.group_version, action = excluded.action, location = excluded.location,
+             penalty_source_aud = excluded.penalty_source_aud, penalty_selected_aud = NULL, waste_activity = excluded.waste_activity, content_hash = excluded.content_hash,
+             tag_version = NULL, tagged_at = NULL, answers = NULL, closes_on = NULL, starts_on = NULL, summary = NULL, summary_version = NULL
            WHERE items.content_hash != excluded.content_hash
            RETURNING id`,
         )
@@ -49,7 +49,7 @@ export const upsertItems =
           item.publishedAt,
           item.body,
           extra.party,
-          extra.partyGroup,
+          groupOf({ kind: item.kind, party: extra.party, title: item.title, body: item.body }),
           extra.action,
           extra.location,
           extra.penaltyAud,
@@ -57,6 +57,7 @@ export const upsertItems =
           now.toISOString(),
           item.detailUrl,
           extra.wasteActivity ? 1 : 0,
+          PARTIES_VERSION,
         );
     });
     // D1 limits the statements in one batch, thus send them in groups.
@@ -84,6 +85,8 @@ const ItemRow = z.object({
   action: z.string().nullable(),
   location: z.string().nullable(),
   penalty_aud: z.number().nullable(),
+  penalty_source_aud: z.number().nullable(),
+  content_hash: z.string(),
   waste_activity: z.number(),
   answers: z.string().nullable(),
   summary: z.string().nullable(),
@@ -107,6 +110,8 @@ const toStoredItem = (row: z.infer<typeof ItemRow>): StoredItem => ({
   action: row.action,
   location: row.location,
   penaltyAud: row.penalty_aud,
+  penaltySourceAud: row.penalty_source_aud,
+  contentHash: row.content_hash,
   wasteActivity: row.waste_activity === 1,
   answers: row.answers === null ? null : JSON.parse(row.answers),
   summary: row.summary === null ? null : (Summary.safeParse(JSON.parse(row.summary)).data ?? null),
@@ -115,9 +120,15 @@ const toStoredItem = (row: z.infer<typeof ItemRow>): StoredItem => ({
 });
 
 const ITEM_COLUMNS =
-  'id, source_id, kind, jurisdiction, title, url, published_at, body, detail_url, detail_fetched_at, party, party_group, action, location, penalty_aud, waste_activity, answers, summary, closes_on, starts_on';
+  'id, source_id, kind, jurisdiction, title, url, published_at, body, detail_url, detail_fetched_at, party, party_group, action, location, penalty_aud, penalty_source_aud, content_hash, waste_activity, answers, summary, closes_on, starts_on';
 
 const parseRows = (result: { results: unknown[] }) => z.array(ItemRow).parse(result.results).map(toStoredItem);
+
+// Rows that also select `PRIORITY_SQL AS priority`.
+const parseRanked = (result: { results: unknown[] }) => {
+  const priorities = z.array(z.object({ priority: z.number() })).parse(result.results);
+  return parseRows(result).map((item, i) => ({ item, priority: priorities[i]?.priority ?? 0 }));
+};
 
 export const getItems = (db: D1Database) => async (ids: string[]) =>
   ids.length === 0
@@ -129,56 +140,72 @@ export const getItems = (db: D1Database) => async (ids: string[]) =>
           .all(),
       );
 
-// `mentioned` is the company group that a regulatory item names. Enforcement
-// items keep the group of their party.
+// Each write of Jev output applies only to the text that Jev read. A newer
+// text has a new hash and a new message on the queue.
 export const saveAnswers =
   (db: D1Database) =>
   async ({
     itemId: id,
+    contentHash,
     answers,
     version,
     now,
     penaltyAud,
     closesOn,
     startsOn,
-    mentioned,
   }: {
     itemId: string;
+    contentHash: string;
     answers: unknown;
     version: number;
     now: Date;
     penaltyAud: number | null;
     closesOn: string | null;
     startsOn: string | null;
-    mentioned: string | null;
   }) => {
-    // A penalty from the source columns stays. A selected penalty fills only an empty column.
     await db
       .prepare(
-        `UPDATE items SET answers = ?1, tag_version = ?2, tagged_at = ?3, penalty_aud = COALESCE(penalty_aud, ?5), closes_on = ?6, starts_on = ?7,
-           party_group = CASE WHEN kind = 'regulatory' THEN ?8 ELSE party_group END
-         WHERE id = ?4`,
+        `UPDATE items SET answers = ?1, tag_version = ?2, tagged_at = ?3, penalty_selected_aud = ?5, closes_on = ?6, starts_on = ?7
+         WHERE id = ?4 AND content_hash = ?8`,
       )
-      .bind(JSON.stringify(answers), version, now.toISOString(), id, penaltyAud, closesOn, startsOn, mentioned)
+      .bind(JSON.stringify(answers), version, now.toISOString(), id, penaltyAud, closesOn, startsOn, contentHash)
       .run();
   };
 
+// The detail page can name a company group that the list text does not.
 export const saveDetail =
   (db: D1Database) =>
-  async ({ itemId: id, body, now }: { itemId: string; body: string; now: Date }) => {
-    await db.prepare('UPDATE items SET body = ?1, detail_fetched_at = ?2, summary = NULL, summary_version = NULL WHERE id = ?3').bind(body, now.toISOString(), id).run();
+  async ({ itemId: id, contentHash, body, group, now }: { itemId: string; contentHash: string; body: string; group: string | null; now: Date }) => {
+    await db
+      .prepare(
+        `UPDATE items SET body = ?1, detail_fetched_at = ?2, summary = NULL, summary_version = NULL, party_group = ?4, group_version = ?5
+         WHERE id = ?3 AND content_hash = ?6`,
+      )
+      .bind(body, now.toISOString(), id, group, PARTIES_VERSION, contentHash)
+      .run();
   };
 
 // A null summary stores the attempt, thus the daily run does not ask again
 // for an item that gives no usable answer. A new version asks again.
 export const saveSummary =
   (db: D1Database) =>
-  async ({ itemId: id, summary, version }: { itemId: string; summary: Summary | null; version: number }) => {
+  async ({ itemId: id, contentHash, summary, version }: { itemId: string; contentHash: string; summary: Summary | null; version: number }) => {
     await db
-      .prepare('UPDATE items SET summary = ?1, summary_version = ?2 WHERE id = ?3')
-      .bind(summary === null ? null : JSON.stringify(summary), version, id)
+      .prepare('UPDATE items SET summary = ?1, summary_version = ?2 WHERE id = ?3 AND content_hash = ?4')
+      .bind(summary === null ? null : JSON.stringify(summary), version, id, contentHash)
       .run();
   };
+
+// Items with a group from an older alias list.
+export const staleGroupIds = (db: D1Database) => async ({ version, limit }: { version: number; limit: number }) =>
+  z
+    .array(z.object({ id: z.string() }))
+    .parse((await db.prepare('SELECT id FROM items WHERE group_version IS NOT ?1 LIMIT ?2').bind(version, limit).all()).results)
+    .map((row) => row.id);
+
+export const saveGroups = (db: D1Database) => async ({ groups, version }: { groups: { itemId: string; group: string | null }[]; version: number }) => {
+  if (groups.length > 0) await db.batch(groups.map(({ itemId: id, group }) => db.prepare('UPDATE items SET party_group = ?1, group_version = ?2 WHERE id = ?3').bind(group, version, id)));
+};
 
 // Items that the views show by default and that have no current summary.
 // `ids` limits the check to those items, for example the ones just tagged.
@@ -194,14 +221,16 @@ export const unsummarisedIds =
     return z.array(z.object({ id: z.string() })).parse(result.results).map((row) => row.id);
   };
 
-// `seenBefore` skips items that a run in progress has sent to the queue already.
+// `seenBefore` skips new items that a run in progress has sent to the queue already.
+const UNTAGGED_SQL = '(tag_version IS NULL OR tag_version < ?1)';
+
 export const untaggedIds = (db: D1Database) => async ({ version, limit, seenBefore }: { version: number; limit: number; seenBefore: Date }) =>
   z
     .array(z.object({ id: z.string() }))
     .parse(
       (
         await db
-          .prepare('SELECT id FROM items WHERE (tag_version IS NULL OR tag_version < ?1) AND first_seen_at < ?3 LIMIT ?2')
+          .prepare(`SELECT id FROM items WHERE ${UNTAGGED_SQL} AND first_seen_at < ?3 LIMIT ?2`)
           .bind(version, limit, seenBefore.toISOString())
           .all()
       ).results,
@@ -252,9 +281,8 @@ export const regulatoryPage = (db: D1Database) => async (q: RegulatoryQuery) => 
       .bind(...filters.params, q.limit, q.offset),
     db.prepare(`SELECT COUNT(*) AS n FROM items WHERE ${filters.sql}`).bind(...filters.params),
   ]);
-  const priorities = z.array(z.object({ priority: z.number() })).parse(page?.results ?? []);
   return {
-    rows: parseRows(page ?? { results: [] }).map((item, i) => ({ item, priority: priorities[i]?.priority ?? 0 })),
+    rows: parseRanked(page ?? { results: [] }),
     matched: first(matched),
   };
 };
@@ -269,6 +297,15 @@ export type EnforcementQuery = {
   limit: number;
   offset: number;
 };
+
+// Enforcement counts for each company group. Records with no known group count as "other".
+const groupCounts = (db: D1Database, where: { sql: string; params: unknown[] }) =>
+  db
+    .prepare(
+      `SELECT COALESCE(party_group, 'other') AS grp, COUNT(*) AS n, SUM(penalty_aud) AS penalty, SUM(${IS_SERIOUS_SQL}) AS serious
+       FROM items WHERE ${where.sql} GROUP BY grp`,
+    )
+    .bind(...where.params);
 
 const GroupRow = z.object({ grp: z.string(), n: z.number(), penalty: z.number().nullable(), serious: z.number() });
 const PenaltyRow = z.object({ offence: z.string().nullable(), penalty: z.number() });
@@ -287,12 +324,7 @@ export const enforcementPage = (db: D1Database) => async (q: EnforcementQuery) =
     ...when(q.offence !== undefined, () => clause(`${OFFENCE_SQL} = ?`, q.offence ?? '')),
   ]);
   const [groups, offences, page, matched, penalties] = await db.batch([
-    db
-      .prepare(
-        `SELECT COALESCE(party_group, 'other') AS grp, COUNT(*) AS n, SUM(penalty_aud) AS penalty, SUM(${IS_SERIOUS_SQL}) AS serious
-         FROM items WHERE ${base.sql} GROUP BY grp`,
-      )
-      .bind(...base.params),
+    groupCounts(db, base),
     db.prepare(`SELECT ${OFFENCE_SQL} AS offence, COUNT(*) AS n FROM items WHERE ${base.sql} GROUP BY offence`).bind(...base.params),
     db.prepare(`SELECT ${ITEM_COLUMNS} FROM items WHERE ${listed.sql} ORDER BY published_at DESC LIMIT ? OFFSET ?`).bind(...listed.params, q.limit, q.offset),
     db.prepare(`SELECT COUNT(*) AS n FROM items WHERE ${listed.sql}`).bind(...listed.params),
@@ -437,7 +469,7 @@ export const latestRuns = (db: D1Database) => async () =>
   );
 
 export const countUntagged = (db: D1Database) => async (version: number) =>
-  z.object({ n: z.number() }).parse(await db.prepare('SELECT COUNT(*) AS n FROM items WHERE tag_version IS NULL OR tag_version < ?1').bind(version).first()).n;
+  z.object({ n: z.number() }).parse(await db.prepare(`SELECT COUNT(*) AS n FROM items WHERE ${UNTAGGED_SQL}`).bind(version).first()).n;
 
 // Deletes stored records whose party fails `keep`. A stricter rule for
 // personal information then also applies to records stored before it.
@@ -497,19 +529,18 @@ export const labelStats = (db: D1Database) => async (version: number) =>
     ).results,
   );
 
-// Relevant regulatory items with a submission close date or a start date on or after `from`.
+// Relevant regulatory items with a submission close date or a start date from `from` to `to`.
 export const upcomingDates = (db: D1Database) => async ({ version, from, to }: { version: number; from: string; to: string }) => {
   const result = await db
     .prepare(
       `SELECT ${ITEM_COLUMNS}, ${PRIORITY_SQL} AS priority FROM items
        WHERE kind = 'regulatory' AND tag_version = ?1 AND ${IS_RELEVANT_SQL}
          AND ((closes_on >= ?2 AND closes_on <= ?3) OR (starts_on >= ?2 AND starts_on <= ?3))
-       LIMIT 500`,
+       ORDER BY priority DESC LIMIT 500`,
     )
     .bind(version, from, to)
     .all();
-  const priorities = z.array(z.object({ priority: z.number() })).parse(result.results);
-  return parseRows(result).map((item, i) => ({ item, priority: priorities[i]?.priority ?? 0 }));
+  return parseRanked(result);
 };
 
 export type ReportQuery = { version: number; from: string; to: string };
@@ -517,7 +548,7 @@ export type ReportQuery = { version: number; from: string; to: string };
 const between = ({ kind, version, from, to }: ReportQuery & { kind: NewItem['kind'] }) =>
   clause('kind = ? AND tag_version = ? AND COALESCE(published_at, substr(first_seen_at, 1, 10)) BETWEEN ? AND ?', kind, version, from, to);
 
-const ReportCounts = z.object({ relevant: z.number(), high: z.number(), action: z.number(), submissions: z.number() });
+const ReportCounts = z.object({ high: z.number(), action: z.number(), submissions: z.number() });
 
 // The facts for the quarterly report. Each list is short, thus the page stays one or two printed pages.
 export const reportData = (db: D1Database) => async (q: ReportQuery) => {
@@ -526,7 +557,7 @@ export const reportData = (db: D1Database) => async (q: ReportQuery) => {
   const [counts, changes, named, groups] = await db.batch([
     db
       .prepare(
-        `SELECT COUNT(*) AS relevant, COALESCE(SUM(${PRIORITY_SQL} >= ${PRIORITY_HIGH}), 0) AS high,
+        `SELECT COALESCE(SUM(${PRIORITY_SQL} >= ${PRIORITY_HIGH}), 0) AS high,
            COALESCE(SUM(${flagSql('actionRequired')}), 0) AS action, COALESCE(SUM(${flagSql('submissionsOpen')}), 0) AS submissions
          FROM items WHERE ${reg.sql}`,
       )
@@ -539,14 +570,11 @@ export const reportData = (db: D1Database) => async (q: ReportQuery) => {
       )
       .bind(...reg.params),
     db.prepare(`SELECT ${ITEM_COLUMNS} FROM items WHERE ${enf.sql} AND party_group IS NOT NULL ORDER BY published_at DESC LIMIT 40`).bind(...enf.params),
-    db
-      .prepare(`SELECT COALESCE(party_group, 'other') AS grp, COUNT(*) AS n, SUM(penalty_aud) AS penalty, SUM(${IS_SERIOUS_SQL}) AS serious FROM items WHERE ${enf.sql} GROUP BY grp`)
-      .bind(...enf.params),
+    groupCounts(db, enf),
   ]);
-  const priorities = z.array(z.object({ priority: z.number() })).parse(changes?.results ?? []);
   return {
     counts: ReportCounts.parse(counts?.results[0]),
-    changes: parseRows(changes ?? { results: [] }).map((item, i) => ({ item, priority: priorities[i]?.priority ?? 0 })),
+    changes: parseRanked(changes ?? { results: [] }),
     named: parseRows(named ?? { results: [] }),
     groups: GroupRow.array().parse(groups?.results ?? []),
   };

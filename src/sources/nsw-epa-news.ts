@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { between, decodeEntities, htmlToText } from './html';
+import { changed, uniqueBy } from './common';
+import { inlineText, mainText } from './html';
 import { getText } from './http';
 import type { Source } from './types';
 
@@ -19,10 +20,12 @@ export const parseNswEpaList = (html: string) => {
   const links = [...html.matchAll(/<a\s+href="(\/news\/epamedia\/([^"]+))"[^>]*>([\s\S]*?)<\/a>/gi)].map((m) => ({
     path: m[1] ?? '',
     slug: m[2] ?? '',
-    title: decodeEntities((m[3] ?? '').replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim(),
+    title: inlineText(m[3] ?? ''),
   }));
-  const unique = links.filter((link, i) => link.title !== '' && links.findIndex((l) => l.path === link.path) === i);
-  return unique.map((link) => ({
+  return uniqueBy(
+    links.filter((link) => link.title !== ''),
+    (link) => link.path,
+  ).map((link) => ({
     kind: 'regulatory',
     externalId: link.slug,
     jurisdiction: 'NSW',
@@ -34,23 +37,21 @@ export const parseNswEpaList = (html: string) => {
   }));
 };
 
-export const extractNswEpaArticle = (html: string) => htmlToText(between({ html, start: /<main[\s>]/i, end: /<\/main>/i }));
-
 export const nswEpaNews: Source = {
   id: 'nsw-epa-news',
   name: 'NSW EPA news and media releases',
   kind: 'regulatory',
   jurisdiction: 'NSW',
   homepage: LIST,
-  extractDetail: extractNswEpaArticle,
+  extractDetail: mainText,
   // A daily run reads the first page. A backfill reads the pages after it, to its start date.
   run: ({ page, since }) => {
     const index = z.number().catch(0).parse(page ?? 0);
-    return getText({ url: index === 0 ? LIST : `${LIST}?page=${index}` }).map(({ text }) => {
+    return getText({ url: index === 0 ? LIST : `${LIST}?page=${index}` }).andThen(({ text }) => {
       const records = parseNswEpaList(text);
       const oldest = records.flatMap((r) => (r.publishedAt === null ? [] : [r.publishedAt])).sort()[0];
       const more = since !== null && oldest !== undefined && oldest > since.slice(0, 10) && index + 1 < MAX_PAGES;
-      return { type: 'changed' as const, records, cursor: null, next: more ? index + 1 : null, raw: [] };
+      return changed({ records, next: more ? index + 1 : null });
     });
   },
 };
