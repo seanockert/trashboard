@@ -18,8 +18,10 @@ const SUMMARY_SOURCES = ['nsw-epa-news', 'epa-vic-news', 'qld-legislation', 'tas
 const MIN_BODY = 400;
 
 // Only items that the views show by default get a summary.
+// "+kind" stops SQLite from using the kind index for the OR. With that index, a
+// check of 10 IDs read all rows (about 9,500), not the 10 rows of the primary key.
 export const NEEDS_SUMMARY_SQL = `(source_id IN (${SUMMARY_SOURCES.map((id) => `'${id}'`).join(', ')}) AND length(body) >= ${MIN_BODY}
-  AND ((kind = 'regulatory' AND ${IS_RELEVANT_SQL}) OR (kind = 'enforcement' AND ${IS_WASTE_OPERATOR_SQL})))`;
+  AND ((+kind = 'regulatory' AND ${IS_RELEVANT_SQL}) OR (+kind = 'enforcement' AND ${IS_WASTE_OPERATOR_SQL})))`;
 
 export const Summary = z.object({ what: z.string().min(1), points: z.array(z.string()) });
 export type Summary = z.infer<typeof Summary>;

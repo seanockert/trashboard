@@ -58,7 +58,17 @@ Workers AI writes a short summary for each card that the views show by default.
 | WA DWER consultations | Regulatory (consultations) | Citizen Space search API | All consultations, about 40, in one response |
 | QLD environmental authority applications | Regulatory (JJ Richards only) | CKAN datastore SQL | New and amendment applications, with their status |
 | EPA Victoria operating licences | Regulatory (JJ Richards only) | Vicmap WFS | One item for each amendment date |
-| SA EPA licence changes | Regulatory (JJ Richards only) | JSONP feed of all changes | Needs a browser-like user agent and an Accept header with JavaScript. The first run reads back about 12 months |
+| SA EPA licence changes | Regulatory (JJ Richards only) | JSONP feed of all changes | CloudFront refuses Cloudflare, thus the daily run skips it. Run `bun run relay:sa` on a local computer (see below). The first run reads back about 12 months |
+
+## SA EPA relay
+
+The SA EPA register returns HTTP 403 to Cloudflare. To update it, run this on a local computer from time to time:
+
+```
+TRASHBOARD_URL=https://<worker url> DASHBOARD_PASSWORD=... bun run relay:sa
+```
+
+The script logs in, fetches each page, and sends it to `POST /relay/sa`. The worker stops at the cursor, thus a missed week loses nothing.
 
 ## Backfill
 
@@ -98,6 +108,10 @@ A better measure is precision above a priority threshold, and recall on a labell
 - One item message holds up to 10 items: 10 Jev requests, up to 10 detail pages and up to 10 Workers AI requests. Only the failed items go back on the queue.
 - The views do the filters, the sort, the counts and the paging in D1 SQL over the stored answers (`json_extract`). The Worker parses only the 50 rows on the page. The ranking policy is in `src/rank.ts`.
 - Queue budget: 10,000 operations each day. A full new tag of all items uses about 700.
+- D1 read budget: 5 million rows each day. The 12-month backfill on 2026-09-24 went above it, because each item message read all rows. Each query must use an index:
+  - The New tab and the date filters use the `items_day` index. The Acting and Done tabs read the `triage` table first.
+  - Write `+kind` in a filter, so that SQLite does not use the kind index. That index reads all items of one kind.
+  - Check a new query with `EXPLAIN QUERY PLAN`, and after deploy with `wrangler d1 insights trashboard --sort-by=reads`.
 - Measured locally in Bun (warm): the largest parse is the WA page at 5.5 ms. It is 17.5 ms on a cold start. Check the real CPU time in Workers Logs after deploy. If it is too high, split the WA page into one message for each table.
 
 ## Inbox
@@ -146,10 +160,9 @@ A better measure is precision above a priority threshold, and recall on a labell
 ## Before deploy
 
 - Create the D1 database `trashboard` and the queues `trashboard-ingest` and `trashboard-items`, then put the database ID in `wrangler.jsonc`.
-- Apply the migrations: `npm run db:migrate:remote`. Before launch, the schema changes go into `migrations/0001_init.sql`, and `npm run db:reset:remote` deletes all tables and data and applies it again.
+- Apply the migrations: `npm run db:migrate:remote`. The live database has data, thus a schema change is a new migration file. `npm run db:reset:remote` deletes all tables and data.
 - After the deploy, click "Tag and summarise waiting items" on the Sources page. Tag version 4 changes the questions, thus the views are empty until the items have new tags.
 - Set the secrets: `TYPESAFE_API_KEY`, `DASHBOARD_PASSWORD`, `SESSION_SECRET`.
-- Test the SA EPA source from Cloudflare. CloudFront can block Cloudflare egress addresses.
 
 ## Next (v2 and later)
 

@@ -28,6 +28,7 @@ describe('QLD enforcement register', () => {
     row('STAT-2', { 'Enforcement Type': 'Clean-up Notice', Activities: 'ERA 16 - Extractive activities' }),
     row('STAT-3', { Activities: 'ERA 63 - Sewage Treatment' }),
     row('STAT-4', { Activities: 'ERA 62 - Resource recovery and transfer facility operation' }),
+    row('STAT-5', { 'Issued To': '' }),
   ]);
 
   it('groups rows by reference and keeps the first date', () => {
@@ -35,6 +36,7 @@ describe('QLD enforcement register', () => {
     expect(records[0]).toMatchObject({ externalId: 'STAT-1', publishedAt: '2024-08-07', party: 'Example Waste Pty Ltd' });
     expect(records[0]?.action).toBe('Direction Notice; Environmental Protection Order (EPO)');
   });
+  it('drops a reference with no holder', () => expect(records.map((r) => r.externalId)).not.toContain('STAT-5'));
   it('marks waste activities from the ERA code, but not sewage treatment', () => expect(records.map((r) => r.wasteActivity)).toEqual([true, false, false, true]));
 });
 
@@ -154,6 +156,14 @@ describe('JJ Richards licences', () => {
       const outcome = (await saLicences.run({ cursor: '2026-09-01', now: new Date('2026-09-24'), page: null, since: null }))._unsafeUnwrap();
       if (outcome.type !== 'changed') throw new Error('Expected records.');
       expect(outcome.next).toEqual({ page: 1, newest: '2026-09-24' });
+    });
+    it('reads a page that the relay script sends, with no fetch', async () => {
+      const fetch = vi.fn();
+      vi.stubGlobal('fetch', fetch);
+      const outcome = (await saLicences.run({ cursor: '2026-09-22', now: new Date('2026-09-24'), page: { page: 0, newest: null, body: page(full) }, since: null }))._unsafeUnwrap();
+      if (outcome.type !== 'changed') throw new Error('Expected records.');
+      expect(outcome.records).toHaveLength(1);
+      expect(fetch).not.toHaveBeenCalled();
     });
   });
 });

@@ -22,8 +22,8 @@
   --color-shadow: light-dark(hsl(0, 0%, 0%, 0.1), hsl(0, 0%, 0%, 0.5));
   --color-backdrop: hsl(0, 0%, 0%, 0.45);
   --easing-base: cubic-bezier(0.2, 1.75, 0.5, 0.6);
-  --font-stack: system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-size: 1.25rem;
+  --font-stack: system-ui, sans-serif;
+  --font-size: clamp(1rem, 3vw, 1.25rem);
   --font-size-small: 0.75rem;
   --font-size-note: 0.875rem;
   --radius: 0.375rem;
@@ -259,6 +259,10 @@ td.num, th.num {
 
 tr.self td {
   font-weight: 650;
+}
+
+td {
+  line-height: 1.5;
 }
 
 td .title {
@@ -633,6 +637,7 @@ a.tag.on {
   font-weight: 600;
   padding: 0 var(--size-half);
   border-radius: var(--size-quarter);
+  width: fit-content;
 }
 
 .prio.high {
@@ -704,6 +709,15 @@ td .pill {
     color: var(--color-text);
     font-weight: 600;
     border-bottom-color: var(--color-brand);
+  }
+
+  .sort {
+    margin-inline-start: auto;
+  }
+
+  select {
+    font-size: var(--font-size-note);
+    padding: var(--size-quarter) var(--size-half);
   }
 }
 

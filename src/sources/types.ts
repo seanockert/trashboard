@@ -32,4 +32,6 @@ export type Source = {
   run: (ctx: SourceContext) => ResultAsync<FetchOutcome, SourceError>;
   // Turns the page at an item's `detailUrl` into the item body.
   extractDetail?: (html: string) => string;
+  // The worker cannot fetch this source. The daily run skips it, and a script on a local computer sends the pages.
+  manualOnly?: boolean;
 };

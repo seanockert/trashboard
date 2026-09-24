@@ -42,7 +42,7 @@ describe('inbox filters', () => {
   });
   it('ignores a bad tab or view', () => expect(parseInboxFilters({ tab: 'x', view: 'y' }, now)).toMatchObject({ tab: 'new', view: undefined }));
   it('gives URL parameters without the defaults', () =>
-    expect(inboxParams(parseInboxFilters({ q: 'jurisdiction:NSW', tab: 'acting', page: '1' }, now), fields)).toEqual({ q: 'jurisdiction:NSW', tab: 'acting', view: undefined, page: undefined }));
+    expect(inboxParams(parseInboxFilters({ q: 'jurisdiction:NSW', tab: 'acting', page: '1' }, now), fields)).toEqual({ q: 'jurisdiction:NSW', tab: 'acting', view: undefined, sort: undefined, page: undefined }));
   it('gives the scope for D1', () =>
     expect(scopeOf(parseInboxFilters({ q: 'period:2026-Q2 type:enforcement leachate' }, now), now, 4)).toMatchObject({
       period: { from: '2026-04-01', to: '2026-06-30' },

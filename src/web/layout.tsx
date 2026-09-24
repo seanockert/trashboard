@@ -45,7 +45,8 @@ const Intro = () => (
   </dialog>
 );
 
-export const Layout = ({ title, path, children }: { title: string; path: string | null; children: Child }) => (
+// `menu` gives more links for the page at the top of the settings menu.
+export const Layout = ({ title, path, menu, children }: { title: string; path: string | null; menu?: Child; children: Child }) => (
   <html lang="en-AU">
     <head>
       <meta charset="utf-8" />
@@ -69,6 +70,7 @@ export const Layout = ({ title, path, children }: { title: string; path: string 
               <MenuIcon />
             </summary>
             <div class="items stack-zero">
+              {menu}
               <button type="button" onclick="document.getElementById('intro').showModal()">Show welcome</button>
               <a href="/sources">Sources</a>
               <a href="/logout">Log out</a>

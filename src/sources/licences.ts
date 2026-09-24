@@ -1,4 +1,4 @@
-import type { ResultAsync } from 'neverthrow';
+import { okAsync, type ResultAsync } from 'neverthrow';
 import { z } from 'zod';
 import { JJR } from '../parties';
 import { badPageState, changed, lines, newestFirstPage, parseError, text } from './common';
@@ -162,6 +162,8 @@ export const vicLicences: Source = {
 // SA: the EPA public register gives each change to an authorisation, newest
 // first. It has no name filter, thus code reads the recent changes of all
 // holders and keeps JJ Richards. The response is JSONP, not JSON.
+// CloudFront refuses requests from Cloudflare, thus `scripts/sa-relay.ts`
+// fetches the pages on a local computer and sends each body to the worker.
 const SA_API = 'https://www.publicregister.epa.sa.gov.au/ajax/records/search';
 const SA_REGISTER = 'https://www.publicregister.epa.sa.gov.au/';
 const SA_PAGE_ROWS = 100;
@@ -200,11 +202,16 @@ export const saChangeRecord = (c: SaChange) => ({
 });
 
 // The cursor is the newest change date seen. The date is the import date, thus a run needs no re-read.
-const SaState = z.object({ page: z.number().int().min(0), newest: z.string().nullable() });
+// `body` is a page that the relay script fetched. Without it, the worker fetches the page.
+export const SaState = z.object({ page: z.number().int().min(0), newest: z.string().nullable(), body: z.string().optional() });
 
-const fetchSa = ({ page, cursor, newestSoFar }: { page: number; cursor: string | null; newestSoFar: string | null }): ResultAsync<FetchOutcome, SourceError> => {
-  const url = `${SA_API}?${new URLSearchParams({ location: 'area', type: 'A', pageSize: String(SA_PAGE_ROWS), offset: String(page * SA_PAGE_ROWS) })}`;
-  return getText({ url, headers: SA_HEADERS }).andThen(({ text: body }) => {
+export const saPageUrl = (page: number) =>
+  `${SA_API}?${new URLSearchParams({ location: 'area', type: 'A', pageSize: String(SA_PAGE_ROWS), offset: String(page * SA_PAGE_ROWS) })}`;
+
+const fetchSa = ({ page, cursor, newestSoFar, relayed }: { page: number; cursor: string | null; newestSoFar: string | null; relayed: string | undefined }): ResultAsync<FetchOutcome, SourceError> => {
+  const url = saPageUrl(page);
+  const response: ResultAsync<{ text: string }, SourceError> = relayed === undefined ? getText({ url, headers: SA_HEADERS }) : okAsync({ text: relayed });
+  return response.andThen(({ text: body }) => {
     const parsed = SaPage.safeParse(readJsonp(body));
     if (!parsed.success) return parseError(url, parsed.error.message);
     const rows = parsed.data.results;
@@ -221,8 +228,9 @@ export const saLicences: Source = {
   jurisdiction: 'SA',
   homepage: SA_REGISTER,
   run: ({ cursor, page }) => {
-    if (page === null) return fetchSa({ page: 0, cursor, newestSoFar: null });
+    if (page === null) return fetchSa({ page: 0, cursor, newestSoFar: null, relayed: undefined });
     const state = SaState.safeParse(page);
-    return state.success ? fetchSa({ page: state.data.page, cursor, newestSoFar: state.data.newest }) : badPageState(SA_API);
+    return state.success ? fetchSa({ page: state.data.page, cursor, newestSoFar: state.data.newest, relayed: state.data.body }) : badPageState(SA_API);
   },
+  manualOnly: true,
 };

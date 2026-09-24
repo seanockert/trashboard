@@ -3,7 +3,7 @@ import { EnforcementAnswers, ITEM_TYPES, LINES_OF_BUSINESS, RegulatoryAnswers, T
 import { Jurisdiction, type StoredItem, type Triage } from '../items';
 import { PARTY_GROUPS } from '../parties';
 import { FLAG_MIN, PRIORITY_HIGH, PRIORITY_MEDIUM } from '../rank';
-import type { InboxRow, Period, Scope } from '../db';
+import { SORTS, type InboxRow, type Period, type Scope, type Sort } from '../db';
 import { ftsFilter } from '../search';
 import { omniField, parseOmni, formatOmni } from './omnibar';
 
@@ -127,6 +127,8 @@ const InboxParams = z.object({
   tab: z.enum(['new', 'acting', 'done']).catch('new'),
   // The report is the inbox filters on one printable page.
   view: optional(z.literal('report')).catch(undefined),
+  // No sort gives the default of the tab, see sortOf.
+  sort: optional(z.enum(SORTS)).catch(undefined),
   page: optional(z.coerce.number().int().min(1).max(1000)).default(1).catch(1),
 });
 
@@ -141,8 +143,15 @@ export const inboxParams = (f: InboxFilters, fields: InboxFields) => ({
   q: formatOmni(fields, f),
   tab: f.tab === 'new' ? undefined : f.tab,
   view: f.view,
+  sort: f.sort,
   page: f.page > 1 ? f.page : undefined,
 });
+
+// The Done tab shows the last triaged first. New items have no triage date.
+export const sortOf = (f: Pick<InboxFilters, 'tab' | 'sort'>): Sort => {
+  const sort = f.sort ?? (f.tab === 'done' ? 'triaged' : 'priority');
+  return f.tab === 'new' && sort === 'triaged' ? 'priority' : sort;
+};
 
 // The query for D1. `period` is undefined when the user sets none.
 export const scopeOf = (f: InboxFilters, now: Date, version: number): Scope => ({

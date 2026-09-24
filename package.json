@@ -11,7 +11,8 @@
     "test": "vitest run",
     "db:migrate:local": "wrangler d1 migrations apply trashboard --local",
     "db:migrate:remote": "wrangler d1 migrations apply trashboard --remote",
-    "db:reset:remote": "node scripts/reset-db.mjs"
+    "db:reset:remote": "node scripts/reset-db.mjs",
+    "relay:sa": "bun scripts/sa-relay.ts"
   },
   "dependencies": {
     "@typesafe-ai/sdk": "^0.6.0",

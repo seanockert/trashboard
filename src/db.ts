@@ -268,7 +268,11 @@ const clause = (sql: string, ...params: (string | number)[]): Clause => ({ sql, 
 const whereOf = (clauses: Clause[]) => ({ sql: clauses.map((c) => c.sql).join(' AND '), params: clauses.flatMap((c) => c.params) });
 const when = (test: boolean, make: () => Clause): Clause[] => (test ? [make()] : []);
 
-const DAY_SQL = 'COALESCE(published_at, substr(first_seen_at, 1, 10))';
+// A generated column with an index: COALESCE(published_at, substr(first_seen_at, 1, 10)).
+// The D1 free plan permits 5 million rows read each day. Each view must read
+// only the items in its period, or the triaged items. Thus a query that has a
+// period must use this index, and not the kind index. Write "+kind" in a filter for that reason.
+const DAY_SQL = 'day';
 
 export type Period = { from: string; to: string };
 
@@ -296,9 +300,9 @@ const scopeClauses = (s: Scope): Clause[] => [
   ...when(s.jurisdiction !== undefined, () => clause('jurisdiction = ?', s.jurisdiction ?? '')),
   ...when(s.company === 'any', () => clause('party_group IS NOT NULL')),
   ...when(s.company !== undefined && s.company !== 'any', () => clause('party_group = ?', s.company ?? '')),
-  ...when(s.topic !== undefined, () => clause(`kind = 'regulatory' AND ${flagSql(s.topic ?? 'actionRequired')}`)),
-  ...when(s.type === 'enforcement', () => clause(`(kind = 'enforcement' OR ${ITEM_TYPE_SQL} = 'enforcement')`)),
-  ...when(s.type !== undefined && s.type !== 'enforcement', () => clause(`kind = 'regulatory' AND ${ITEM_TYPE_SQL} = ?`, s.type ?? '')),
+  ...when(s.topic !== undefined, () => clause(`+kind = 'regulatory' AND ${flagSql(s.topic ?? 'actionRequired')}`)),
+  ...when(s.type === 'enforcement', () => clause(`(+kind = 'enforcement' OR ${ITEM_TYPE_SQL} = 'enforcement')`)),
+  ...when(s.type !== undefined && s.type !== 'enforcement', () => clause(`+kind = 'regulatory' AND ${ITEM_TYPE_SQL} = ?`, s.type ?? '')),
   // Items whose title, body or party has each word.
   ...when(s.match !== undefined && s.match !== '', () => clause('items.rowid IN (SELECT rowid FROM items_fts WHERE items_fts MATCH ?)', s.match ?? '')),
 ];
@@ -307,20 +311,33 @@ const first = (result: D1Result | undefined) => Count.array().parse(result?.resu
 
 export type Tab = 'new' | 'acting' | 'done';
 
-const TAB_SQL: Record<Tab, string> = {
-  new: 'triage.status IS NULL',
+const INBOX_FROM = 'items LEFT JOIN triage ON triage.item_id = items.id';
+
+// The Acting and Done tabs. CROSS JOIN makes SQLite read the triage table first,
+// thus these tabs read only the triaged items, not all items.
+const TRIAGED_FROM = 'triage CROSS JOIN items ON items.id = triage.item_id';
+
+const TRIAGED_TAB_SQL: Record<Exclude<Tab, 'new'>, string> = {
   acting: `triage.status = 'acting'`,
   done: `triage.status IN ('done', 'dismissed')`,
 };
 
-const TAB_OF_SQL = `(CASE WHEN triage.status IS NULL THEN 'new' WHEN triage.status = 'acting' THEN 'acting' ELSE 'done' END)`;
-
-const INBOX_FROM = 'items LEFT JOIN triage ON triage.item_id = items.id';
+const TRIAGED_TAB_OF_SQL = `(CASE triage.status WHEN 'acting' THEN 'acting' ELSE 'done' END)`;
 
 const INBOX_COLUMNS = `${ITEM_COLUMNS}, ${ITEM_PRIORITY_SQL} AS priority, triage.status AS status, triage.note AS note`;
 
 // Items that name JJ Richards come first, thus the user cannot miss them.
-const INBOX_ORDER = `party_group IS 'jjr' DESC, priority DESC`;
+const INBOX_ORDER = `party_group IS 'jjr' DESC, priority DESC, ${DAY_SQL} DESC`;
+
+export const SORTS = ['priority', 'newest', 'oldest', 'triaged'] as const;
+export type Sort = (typeof SORTS)[number];
+
+const SORT_SQL: Record<Sort, string> = {
+  priority: INBOX_ORDER,
+  newest: `${DAY_SQL} DESC, priority DESC`,
+  oldest: `${DAY_SQL} ASC, priority DESC`,
+  triaged: `triage.updated_at DESC, ${INBOX_ORDER}`,
+};
 
 const TriageRow = z.object({ status: TriageStatus.nullable(), note: z.string().nullable() });
 
@@ -336,24 +353,27 @@ export type InboxRow = ReturnType<typeof parseInbox>[number];
 
 // `period` applies to all tabs when the user sets it. `defaultPeriod` applies to new items only,
 // thus an item that the user acts on stays in the Acting tab after the period.
-export type InboxQuery = { scope: Scope; defaultPeriod: Period; tab: Tab; limit: number; offset: number };
+export type InboxQuery = { scope: Scope; defaultPeriod: Period; tab: Tab; sort: Sort; limit: number; offset: number };
 
+// New items and triaged items are separate queries, thus each one can use its index.
 export const inboxPage = (db: D1Database) => async (q: InboxQuery) => {
-  const base = whereOf([
-    ...scopeClauses(q.scope),
-    clause(IN_INBOX_SQL),
-    ...when(q.scope.period === undefined, () => clause(`(triage.status IS NOT NULL OR ${DAY_SQL} BETWEEN ? AND ?)`, q.defaultPeriod.from, q.defaultPeriod.to)),
+  const inbox = [...scopeClauses(q.scope), clause(IN_INBOX_SQL)];
+  const fresh = whereOf([
+    ...inbox,
+    ...when(q.scope.period === undefined, () => clause(`${DAY_SQL} BETWEEN ? AND ?`, q.defaultPeriod.from, q.defaultPeriod.to)),
+    clause('triage.status IS NULL'),
   ]);
-  const listed = whereOf([base, clause(TAB_SQL[q.tab])]);
-  const order = q.tab === 'done' ? 'triage.updated_at DESC' : INBOX_ORDER;
-  const [page, counts] = await db.batch([
-    db.prepare(`SELECT ${INBOX_COLUMNS} FROM ${INBOX_FROM} WHERE ${listed.sql} ORDER BY ${order} LIMIT ? OFFSET ?`).bind(...listed.params, q.limit, q.offset),
-    db.prepare(`SELECT ${TAB_OF_SQL} AS tab, COUNT(*) AS n FROM ${INBOX_FROM} WHERE ${base.sql} GROUP BY tab`).bind(...base.params),
+  const triaged = whereOf(inbox);
+  const listed = q.tab === 'new' ? { from: INBOX_FROM, where: fresh } : { from: TRIAGED_FROM, where: whereOf([triaged, clause(TRIAGED_TAB_SQL[q.tab])]) };
+  const [page, freshCount, triagedCounts] = await db.batch([
+    db.prepare(`SELECT ${INBOX_COLUMNS} FROM ${listed.from} WHERE ${listed.where.sql} ORDER BY ${SORT_SQL[q.sort]} LIMIT ? OFFSET ?`).bind(...listed.where.params, q.limit, q.offset),
+    db.prepare(`SELECT COUNT(*) AS n FROM ${INBOX_FROM} WHERE ${fresh.sql}`).bind(...fresh.params),
+    db.prepare(`SELECT ${TRIAGED_TAB_OF_SQL} AS tab, COUNT(*) AS n FROM ${TRIAGED_FROM} WHERE ${triaged.sql} GROUP BY tab`).bind(...triaged.params),
   ]);
-  const tabs = z.array(z.object({ tab: z.enum(['new', 'acting', 'done']), n: z.number() })).parse(counts?.results ?? []);
+  const tabs = z.array(z.object({ tab: z.enum(['acting', 'done']), n: z.number() })).parse(triagedCounts?.results ?? []);
   return {
     rows: parseInbox(page ?? { results: [] }),
-    counts: { new: 0, acting: 0, done: 0, ...Object.fromEntries(tabs.map((t) => [t.tab, t.n])) } as Record<Tab, number>,
+    counts: { new: first(freshCount), acting: 0, done: 0, ...Object.fromEntries(tabs.map((t) => [t.tab, t.n])) } as Record<Tab, number>,
   };
 };
 
@@ -516,10 +536,10 @@ const ReportCounts = z.object({ high: z.number(), action: z.number(), submission
 // Each list is short, thus the report stays one or two printed pages.
 export const reportData = (db: D1Database) => async ({ scope }: { scope: Scope & { period: Period } }) => {
   const kept = clause(`(triage.status IS NULL OR triage.status != 'dismissed')`);
-  const reg = whereOf([...scopeClauses(scope), clause(`kind = 'regulatory'`), clause(IS_RELEVANT_SQL), kept]);
+  const reg = whereOf([...scopeClauses(scope), clause(`+kind = 'regulatory'`), clause(IS_RELEVANT_SQL), kept]);
   const listed = whereOf([...scopeClauses(scope), clause(IN_INBOX_SQL), kept, clause(`(${ITEM_PRIORITY_SQL} >= ${PRIORITY_HIGH} OR party_group IS 'jjr')`)]);
   // All records about waste operators, thus the counts compare the groups.
-  const enf = whereOf([...scopeClauses({ ...scope, topic: undefined, type: undefined }), clause(`kind = 'enforcement'`), clause(IS_WASTE_OPERATOR_SQL)]);
+  const enf = whereOf([...scopeClauses({ ...scope, topic: undefined, type: undefined }), clause(`+kind = 'enforcement'`), clause(IS_WASTE_OPERATOR_SQL)]);
   const acting = whereOf([...scopeClauses({ ...scope, period: undefined }), clause(`triage.status = 'acting'`)]);
   const [counts, top, groups, open] = await db.batch([
     db
@@ -536,7 +556,7 @@ export const reportData = (db: D1Database) => async ({ scope }: { scope: Scope &
          FROM items WHERE ${enf.sql} GROUP BY grp`,
       )
       .bind(...enf.params),
-    db.prepare(`SELECT ${INBOX_COLUMNS} FROM ${INBOX_FROM} WHERE ${acting.sql} ORDER BY ${INBOX_ORDER} LIMIT 50`).bind(...acting.params),
+    db.prepare(`SELECT ${INBOX_COLUMNS} FROM ${TRIAGED_FROM} WHERE ${acting.sql} ORDER BY ${INBOX_ORDER} LIMIT 50`).bind(...acting.params),
   ]);
   return {
     counts: ReportCounts.parse(counts?.results[0]),

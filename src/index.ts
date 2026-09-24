@@ -51,7 +51,7 @@ export default {
   async queue(batch, env) {
     await Promise.all(
       batch.messages.map((message) => {
-        if (batch.queue === INGEST_QUEUE) return handle({ message, queue: batch.queue, schema: IngestMessage, run: (body) => ingestPage({ env, ...body }) });
+        if (batch.queue === INGEST_QUEUE) return handle({ message, queue: batch.queue, schema: IngestMessage, run: async (body) => void (await ingestPage({ env, ...body })) });
         if (batch.queue === ITEM_QUEUE)
           return handle({
             message,

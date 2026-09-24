@@ -59,7 +59,7 @@ const FIRST_RUN_DAYS = 365;
 export const scheduleAll = async (env: Env) => {
   const runBefore = new Set(await sourcesRunBefore(env.DB)());
   const firstRunSince = new Date(Date.now() - FIRST_RUN_DAYS * 86_400_000).toISOString();
-  await env.INGEST_QUEUE.sendBatch(SOURCES.map((source) => ({ body: { sourceId: source.id, page: null, since: runBefore.has(source.id) ? null : firstRunSince } })));
+  await env.INGEST_QUEUE.sendBatch(SOURCES.filter((source) => source.manualOnly !== true).map((source) => ({ body: { sourceId: source.id, page: null, since: runBefore.has(source.id) ? null : firstRunSince } })));
 };
 
 // The daily run also sends items that have no current tags, for example
@@ -96,26 +96,41 @@ export const sendItemMessages = ({ env, itemIds, attempt = 1, delaySeconds = 0 }
   );
 
 // Runs one page of one source. The next page, if any, goes back on the queue.
-export const ingestPage = async ({ env, sourceId, page, since }: { env: Env; sourceId: string; page: unknown; since: string | null }) => {
+// With `chain` false, the caller gets the next page and runs it. The relay script uses this.
+export const ingestPage = async ({
+  env,
+  sourceId,
+  page,
+  since,
+  firstPage = page === null,
+  chain = true,
+}: {
+  env: Env;
+  sourceId: string;
+  page: unknown;
+  since: string | null;
+  firstPage?: boolean;
+  chain?: boolean;
+}): Promise<{ next: unknown; error: string | null }> => {
   const source = sourceById(sourceId);
   if (source === undefined) throw new Error(`Unknown source: ${sourceId}`);
   const startedAt = new Date();
   const cursor = await getCursor(env.DB)(sourceId);
   const outcome = await source.run({ cursor, now: startedAt, page, since });
-  const run = { sourceId, startedAt, firstPage: page === null };
+  const run = { sourceId, startedAt, firstPage };
 
   if (outcome.isErr()) {
     const message = describeError(outcome.error);
     console.error(JSON.stringify({ event: 'ingest_failed', sourceId, error: message }));
     await recordRun(env.DB)({ ...run, finishedAt: new Date(), status: 'error', seen: 0, added: 0, dropped: 0, error: message, cursor: null });
-    return;
+    return { next: null, error: message };
   }
 
   if (outcome.value.type === 'unchanged') {
     const purged = source.kind === 'enforcement' ? await deleteParties(env.DB)({ sourceId, keep: isCompanyName }) : 0;
     console.log(JSON.stringify({ event: 'ingest_unchanged', sourceId, purged }));
     await recordRun(env.DB)({ ...run, finishedAt: new Date(), status: 'unchanged', seen: 0, added: 0, dropped: 0, error: null, cursor: null });
-    return;
+    return { next: null, error: null };
   }
 
   const { records, cursor: nextCursor, next } = outcome.value;
@@ -144,7 +159,8 @@ export const ingestPage = async ({ env, sourceId, page, since }: { env: Env; sou
     cursor: isLast ? nextCursor : null,
   });
   // The next page goes on the queue last. A retry of this page then cannot start a second chain.
-  if (!isLast) await env.INGEST_QUEUE.send({ sourceId, page: next, since });
+  if (!isLast && chain) await env.INGEST_QUEUE.send({ sourceId, page: next, since });
+  return { next, error };
 };
 
 // Also finds items with an old tag version, for example after a question changes.

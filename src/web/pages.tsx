@@ -1,6 +1,6 @@
 import type { Child } from 'hono/jsx';
 import type { StoredItem, Triage } from '../items';
-import type { Tab } from '../db';
+import type { Sort, Tab } from '../db';
 import { PARTY_GROUPS } from '../parties';
 import { FLAG_MIN } from '../rank';
 import type { SearchResult } from '../search';
@@ -11,6 +11,7 @@ import {
   OFFENCE_LABELS,
   PAGE_SIZE,
   brisbaneDay,
+  sortOf,
   snippet,
   type DateEntry,
   type groupTable,
@@ -47,7 +48,8 @@ const hereHref = (filters: InboxFilters, fields: InboxFields) => `/${query(inbox
 
 // One input for filters and free text. The script in /assets/omnibar.js shows the suggestions.
 // Without the script, the user can type tokens and press Enter.
-// `hidden` keeps the tab and the view when the user changes the filters. `children` go beside "Clear all".
+// `hidden` keeps the tab, the view and the sort when the user changes the filters. `children` go beside "Clear all".
+// "Clear all" shows only when there are filters or text to clear.
 const OmniBar = ({
   fields,
   filters,
@@ -58,41 +60,48 @@ const OmniBar = ({
   filters: InboxFilters;
   hidden: Record<string, string | undefined>;
   children?: Child;
-}) => (
-  <form class="omni stack-half" method="get" action="/" role="search" data-spec={JSON.stringify(omniSpec(fields))}>
-    <div class="omni-box">
-      <div class="omni-mirror" aria-hidden="true" />
-      <input
-        type="text"
-        id="q"
-        name="q"
-        value={formatOmni(fields, filters)}
-        placeholder="Rummage by topic, place or company, or just type"
-        aria-label="Filter and search"
-        autocomplete="off"
-        autocapitalize="off"
-        spellcheck={false}
-        role="combobox"
-        aria-autocomplete="list"
-        aria-expanded="false"
-        aria-controls="omni-list"
-      />
-      <div class="omni-pop" id="omni-list" role="listbox" aria-label="Suggestions" hidden />
-    </div>
-    {Object.entries(hidden).map(([name, value]) => value !== undefined && <input type="hidden" name={name} value={value} />)}
-    <div class="omni-toggles inline-2x inline-wrap">
-      {children}
-      <a class="note" href={`/${query({ tab: hidden['tab'], view: hidden['view'] })}`}>
-        Clear all
-      </a>
-    </div>
-    {filters.invalid.length > 0 && <div class="error note">Never heard of it, so we skipped it: {filters.invalid.join(', ')}</div>}
-    <noscript>
-      <button type="submit">Apply</button>
-    </noscript>
-    <script src="/assets/omnibar.js" defer />
-  </form>
-);
+}) => {
+  const omni = formatOmni(fields, filters);
+  return (
+    <form class="omni stack-half" method="get" action="/" role="search" data-spec={JSON.stringify(omniSpec(fields))}>
+      <div class="omni-box">
+        <div class="omni-mirror" aria-hidden="true" />
+        <input
+          type="text"
+          id="q"
+          name="q"
+          value={omni}
+          placeholder="Rummage by topic, place or company, or just type"
+          aria-label="Filter and search"
+          autocomplete="off"
+          autocapitalize="off"
+          spellcheck={false}
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded="false"
+          aria-controls="omni-list"
+        />
+        <div class="omni-pop" id="omni-list" role="listbox" aria-label="Suggestions" hidden />
+      </div>
+      {Object.entries(hidden).map(([name, value]) => value !== undefined && <input type="hidden" name={name} value={value} />)}
+      {(children !== undefined || omni !== '') && (
+        <div class="omni-toggles inline-2x inline-wrap">
+          {children}
+          {omni !== '' && (
+            <a class="note" href={`/${query(hidden)}`}>
+              Clear all
+            </a>
+          )}
+        </div>
+      )}
+      {filters.invalid.length > 0 && <div class="error note">Never heard of it, so we skipped it: {filters.invalid.join(', ')}</div>}
+      <noscript>
+        <button type="submit">Apply</button>
+      </noscript>
+      <script src="/assets/omnibar.js" defer />
+    </form>
+  );
+};
 
 // A link to the AI search for the free text of the omni-bar.
 const AskAi = ({ text }: { text: string }) =>
@@ -178,7 +187,7 @@ const DateTags = ({ item }: { item: StoredItem }) => {
 };
 
 // Act or dismiss a new item. Add a note while acting, then mark it done.
-// "new" as the status makes the item new again.
+// "new" as the status makes the item new again (Drop, Restore).
 const TriageForm = ({ item, triage, back }: { item: StoredItem; triage: Triage | null; back: string }) => (
   <form class="triage stack-half" method="post" action="/triage">
     <input type="hidden" name="itemId" value={item.id} />
@@ -195,7 +204,7 @@ const TriageForm = ({ item, triage, back }: { item: StoredItem; triage: Triage |
           <button type="submit" name="status" value="acting">
             Act
           </button>
-          <button type="submit" name="status" value="dismissed" class="secondary" title="Chuck it. Also teaches the priority what you don’t care about.">
+          <button type="submit" name="status" value="dismissed" class="secondary" title="Chuck it. Restore it from Done & dismissed any time.">
             Dismiss
           </button>
         </>
@@ -207,6 +216,9 @@ const TriageForm = ({ item, triage, back }: { item: StoredItem; triage: Triage |
           </button>
           <button type="submit" name="status" value="acting" class="secondary">
             Save note
+          </button>
+          <button type="submit" name="status" value="new" class="secondary" title="Back to New. Clears the note.">
+            Drop
           </button>
         </>
       )}
@@ -352,7 +364,30 @@ const DateTable = ({ entries }: { entries: DateEntry[] }) => (
   </div>
 );
 
-const TAB_LABELS: Record<Tab, string> = { new: 'New', acting: 'Acting', done: 'Done' };
+const TAB_LABELS: Record<Tab, string> = { new: 'New', acting: 'Acting', done: 'Done & dismissed' };
+
+const SORT_LABELS: Record<Sort, string> = { priority: 'Priority', newest: 'Newest', oldest: 'Oldest', triaged: 'Last touched' };
+
+// New items have no triage date, thus "Last touched" is not an option for them.
+const SortSelect = ({ filters, fields }: { filters: InboxFilters; fields: InboxFields }) => {
+  const { page: _, ...params } = inboxParams({ ...filters, sort: undefined }, fields);
+  const sorts = (['priority', 'newest', 'oldest', 'triaged'] as const).filter((s) => s !== 'triaged' || filters.tab !== 'new');
+  return (
+    <form class="sort" method="get" action="/">
+      {Object.entries(params).map(([name, value]) => value !== undefined && value !== '' && <input type="hidden" name={name} value={String(value)} />)}
+      <select name="sort" aria-label="Sort" onchange="this.form.submit()">
+        {sorts.map((s) => (
+          <option value={s} selected={sortOf(filters) === s}>
+            {SORT_LABELS[s]}
+          </option>
+        ))}
+      </select>
+      <noscript>
+        <button type="submit">Sort</button>
+      </noscript>
+    </form>
+  );
+};
 
 const EMPTY_TEXT: Record<Tab, string> = {
   new: 'Nothing at the tip today. You’re all caught up.',
@@ -368,18 +403,15 @@ export const InboxPage = ({ model, filters, fields }: { model: InboxModel; filte
   const report = { ...filters, view: 'report' as const, picked: { ...filters.picked, period: filters.picked.period ?? model.reportQuarter } };
   const back = hereHref(filters, fields);
   return (
-    <Layout title="Inbox" path="/">
-      <OmniBar fields={fields} filters={filters} hidden={{ tab: filters.tab === 'new' ? undefined : filters.tab }}>
-        <a class="note" href={hereHref({ ...report, page: 1 }, fields)}>
-          Report
-        </a>
-      </OmniBar>
+    <Layout title="Inbox" path="/" menu={<a href={hereHref({ ...report, page: 1 }, fields)}>Report</a>}>
+      <OmniBar fields={fields} filters={filters} hidden={{ tab: filters.tab === 'new' ? undefined : filters.tab, sort: filters.sort }} />
       <nav class="tabs inline" aria-label="Status">
         {(['new', 'acting', 'done'] as const).map((tab) => (
           <a href={inboxHref({ ...filters, tab }, fields)} class={filters.tab === tab ? 'on' : ''} aria-current={filters.tab === tab ? 'page' : undefined}>
             {TAB_LABELS[tab]} <span class="note">{model.counts[tab]}</span>
           </a>
         ))}
+        <SortSelect filters={filters} fields={fields} />
       </nav>
       {filters.tab !== 'done' && model.due.length > 0 && (
         <>
@@ -387,7 +419,9 @@ export const InboxPage = ({ model, filters, fields }: { model: InboxModel; filte
           <DateTable entries={model.due} />
         </>
       )}
-      {filters.tab === 'new' && filters.picked.period === undefined && <p class="note">Fresh from the last 90 days. JJ Richards first, then the big stuff.</p>}
+      {filters.tab === 'new' && filters.picked.period === undefined && (
+        <p class="note">Fresh from the last 90 days.{sortOf(filters) === 'priority' && ' JJ Richards first, then the big stuff.'}</p>
+      )}
       {model.rows.length === 0 ? (
         <div class="empty">
           {filters.text === '' && filters.picked.topic === undefined ? EMPTY_TEXT[filters.tab] : 'Nothing in this pile. Try other filters.'}

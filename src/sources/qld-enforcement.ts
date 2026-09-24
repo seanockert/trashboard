@@ -83,7 +83,8 @@ export const splitPage = ({ rows, offset, total }: { rows: Row[]; offset: number
   return cut <= 0 ? { rows, nextOffset: offset + rows.length } : { rows: rows.slice(0, cut), nextOffset: offset + cut };
 };
 
-export const recordsFromRows = (rows: Row[]) => groupByReference(rows).map(toRecord);
+// Some references name no holder. They cannot show a company, thus code drops them.
+export const recordsFromRows = (rows: Row[]) => groupByReference(rows).map(toRecord).filter((r) => r.party !== '');
 
 const fetchPage = (page: Page) => {
   const params = new URLSearchParams({

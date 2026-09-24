@@ -6,9 +6,10 @@ import { countUntagged, dueItems, inboxPage, latestRuns, reportData, saveTriage,
 import { readSecrets } from '../env';
 import { TAG_VERSION } from '../jev/questions';
 import { makeClient } from '../jev/tag';
-import { updateAll } from '../pipeline';
+import { ingestPage, updateAll } from '../pipeline';
 import { search } from '../search';
 import { SOURCES } from '../sources';
+import { SaState } from '../sources/licences';
 import { checkPassword, endSession, requireSession, safeNext, startSession } from './auth';
 import {
   addDays,
@@ -24,6 +25,7 @@ import {
   periodRange,
   quarterOf,
   scopeOf,
+  sortOf,
   toRows,
 } from './models';
 import { DUE_DAYS, InboxPage, LoginPage, REPORT_DATE_DAYS, ReportView, SearchPage, SourcesPage } from './pages';
@@ -50,6 +52,18 @@ app.get('/logout', endSession, (c) => c.redirect('/login'));
 
 app.use('*', requireSession);
 
+// One SA EPA page from `scripts/sa-relay.ts`. The script logs in first, thus it has a session cookie.
+// `state` is null for the first page, else the `next` value of the page before it.
+const RelayPage = z.object({ state: SaState.omit({ body: true }).nullable(), body: z.string() });
+
+app.post('/relay/sa', async (c) => {
+  const parsed = RelayPage.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: 'The request is not valid.' }, 400);
+  const { state, body } = parsed.data;
+  const page = { ...(state ?? { page: 0, newest: null }), body };
+  return c.json(await ingestPage({ env: c.env, sourceId: 'sa-jjr-licences', page, since: null, firstPage: state === null, chain: false }));
+});
+
 // The dates from today to `days` from today, in Brisbane.
 const nextDays = (now: Date, days: number) => ({ from: brisbaneDay(now), to: brisbaneDay(addDays(now, days)) });
 
@@ -75,7 +89,7 @@ app.get('/', async (c) => {
   }
   const dates = nextDays(now, DUE_DAYS);
   const [page, due] = await Promise.all([
-    inboxPage(c.env.DB)({ scope, defaultPeriod: periodRange(DEFAULT_PERIOD, now), tab: filters.tab, limit: PAGE_SIZE, offset: (filters.page - 1) * PAGE_SIZE }),
+    inboxPage(c.env.DB)({ scope, defaultPeriod: periodRange(DEFAULT_PERIOD, now), tab: filters.tab, sort: sortOf(filters), limit: PAGE_SIZE, offset: (filters.page - 1) * PAGE_SIZE }),
     filters.tab === 'done' ? Promise.resolve([]) : dueItems(c.env.DB)({ scope, dates, actingOnly: filters.tab === 'acting' }),
   ]);
   const model = { rows: toRows(page.rows), counts: page.counts, due: dateEntries({ rows: toRows(due), ...dates }), reportQuarter: quarterOf(now) };

@@ -7,6 +7,10 @@
 		"nodejs_compat"
 	],
 	"workers_dev": true,
+	// Cloudflare makes the DNS record and the certificate. seanockert.com must be a zone on this account.
+	"routes": [
+		{ "pattern": "trashboard.seanockert.com", "custom_domain": true }
+	],
 	// Static files in public/ are served before the Worker runs.
 	// Example: public/assets/logo.png is at /assets/logo.png.
 	"assets": {
