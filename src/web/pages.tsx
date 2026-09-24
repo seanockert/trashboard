@@ -16,6 +16,9 @@ import {
   type groupTable,
   type offenceChips,
   type PriorityLevel,
+  type BandStat,
+  type DateEntry,
+  type PenaltyBenchmark,
 } from './models';
 import { FLAG_MIN } from '../rank';
 
@@ -27,6 +30,7 @@ const ITEM_TYPE_LABELS: Record<string, string> = {
   bill: 'Bill',
   consultation: 'Consultation',
   guidance: 'Guidance',
+  licence: 'Licence',
   enforcement: 'Enforcement',
   news: 'News',
 };
@@ -221,8 +225,46 @@ export const LoginPage = ({ next, failed }: { next: string; failed: boolean }) =
   </Layout>
 );
 
-const ChangeCard = ({ row, filters, tracking }: { row: ChangeRow; filters: ChangesFilters; tracking: TrackingMap }) => {
-  const href = (key: 'lob' | 'topic' | 'need', value: string) => query({ ...filters, page: undefined, [key]: filters[key] === value ? undefined : value });
+export type LabelMap = ReadonlyMap<string, boolean>;
+
+const GROUP_LABELS: Record<string, string> = Object.fromEntries(PARTY_GROUPS.map((g) => [g.id, g.label]));
+
+const today = () => new Date().toISOString().slice(0, 10);
+
+// The dates that the source states. A date in the past has a past-tense label.
+const DateTags = ({ item }: { item: StoredItem }) => (
+  <>
+    {item.closesOn !== null && (
+      <div class={`tag${item.closesOn >= today() ? ' warn' : ''}`}>
+        {item.closesOn >= today() ? 'Submissions close' : 'Submissions closed'} {date(item.closesOn)}
+      </div>
+    )}
+    {item.startsOn !== null && (
+      <div class={`tag${item.startsOn >= today() ? ' warn' : ''}`}>
+        {item.startsOn >= today() ? 'Starts' : 'Started'} {date(item.startsOn)}
+      </div>
+    )}
+  </>
+);
+
+// The user's rating, to measure the priority. A click on the current rating removes it.
+const LabelForm = ({ item, label, back }: { item: StoredItem; label: boolean | undefined; back: string }) => (
+  <form class="label" method="post" action="/label" title="Your rating measures how well the priority works. See Priority check in the settings menu.">
+    <input type="hidden" name="itemId" value={item.id} />
+    <input type="hidden" name="back" value={`${back}#${anchor(item)}`} />
+    <div class="note">Useful to you?</div>
+    <button type="submit" name="useful" value={label === true ? 'clear' : '1'} class={`secondary${label === true ? ' on' : ''}`} aria-pressed={label === true}>
+      Yes
+    </button>
+    <button type="submit" name="useful" value={label === false ? 'clear' : '0'} class={`secondary${label === false ? ' on' : ''}`} aria-pressed={label === false}>
+      No
+    </button>
+  </form>
+);
+
+const ChangeCard = ({ row, filters, tracking, label }: { row: ChangeRow; filters: ChangesFilters; tracking: TrackingMap; label: boolean | undefined }) => {
+  const href = (key: 'lob' | 'topic' | 'need' | 'company', value: string) => query({ ...filters, page: undefined, [key]: filters[key] === value ? undefined : value });
+  const group = row.item.partyGroup;
   return (
     <div class="card" id={anchor(row.item)}>
       <Bookmark item={row.item} tracking={tracking.get(row.item.id)} back={`/changes${query(filters)}`} />
@@ -235,6 +277,8 @@ const ChangeCard = ({ row, filters, tracking }: { row: ChangeRow; filters: Chang
       <Title item={row.item} text={row.item.title} />
       <ItemText item={row.item} />
       <div class="tags">
+        {group !== null && <TagLink href={href('company', group)} on={filters.company === group} warn={group === 'jjr'} text={`Names ${GROUP_LABELS[group] ?? group}`} />}
+        <DateTags item={row.item} />
         {row.answers.actionRequired.noul >= FLAG_MIN && <TagLink href={href('need', 'action')} on={filters.need === 'action'} warn text="Action may be needed" />}
         {row.answers.submissionsOpen.noul >= FLAG_MIN && <TagLink href={href('need', 'submissions')} on={filters.need === 'submissions'} warn text="Submissions invited" />}
         {row.lines.map((line) => (
@@ -245,17 +289,30 @@ const ChangeCard = ({ row, filters, tracking }: { row: ChangeRow; filters: Chang
         ))}
       </div>
       <TrackInfo tracking={tracking.get(row.item.id)} />
+      <LabelForm item={row.item} label={label} back={`/changes${query(filters)}`} />
     </div>
   );
 };
 
-export const ChangesPage = ({ rows, matched, filters, tracking }: { rows: ChangeRow[]; matched: number; filters: ChangesFilters; tracking: TrackingMap }) => {
+export const ChangesPage = ({
+  rows,
+  matched,
+  filters,
+  tracking,
+  labels,
+}: {
+  rows: ChangeRow[];
+  matched: number;
+  filters: ChangesFilters;
+  tracking: TrackingMap;
+  labels: LabelMap;
+}) => {
   const toggleAll = query({ ...filters, page: undefined, all: filters.all === '1' ? undefined : '1' });
   return (
     <Layout title="Regulatory changes" path="/changes">
       <h1>Regulatory changes</h1>
       <p class="sub">
-        New laws, consultations and regulator news that can affect the business. The most important are first. <a href="/about#priority">How priority works</a>
+        New laws, consultations and regulator news that can affect the business. Items that name JJ Richards are first, then the most important. <a href="/about#priority">How priority works</a>
       </p>
       <form class="filters" method="get">
         <Select name="days" label="Period" value={filters.days} options={CHANGES_PERIODS} blank={null} />
@@ -269,11 +326,12 @@ export const ChangesPage = ({ rows, matched, filters, tracking }: { rows: Change
           options={[['action', 'Action may be needed'] as const, ['submissions', 'Submissions invited'] as const]}
           blank="All items"
         />
+        <Select name="company" label="Company" value={filters.company} options={[...PARTY_GROUPS.map((g) => [g.id, g.label] as const), ['any', 'Any listed company'] as const]} />
         {filters.all === '1' && <input type="hidden" name="all" value="1" />}
         <NoScriptApply />
       </form>
       <p class="count">{matched === 1 ? '1 item' : `${matched} items`}</p>
-      {rows.length === 0 ? <div class="empty">No items match these filters.</div> : rows.map((row) => <ChangeCard row={row} filters={filters} tracking={tracking} />)}
+      {rows.length === 0 ? <div class="empty">No items match these filters.</div> : rows.map((row) => <ChangeCard row={row} filters={filters} tracking={tracking} label={labels.get(row.item.id)} />)}
       <Pager filters={filters} matched={matched} />
       <p class="note">
         <a href={toggleAll}>{filters.all === '1' ? 'Hide items that are probably not relevant' : 'Also show items that are probably not relevant'}</a>
@@ -307,7 +365,50 @@ const EnforcementCard = ({ row, filters, tracking }: { row: EnforcementRow; filt
   </div>
 );
 
-export type EnforcementModel = { groups: ReturnType<typeof groupTable>; offences: ReturnType<typeof offenceChips>; list: EnforcementRow[]; matched: number };
+export type EnforcementModel = {
+  groups: ReturnType<typeof groupTable>;
+  offences: ReturnType<typeof offenceChips>;
+  penalties: PenaltyBenchmark[];
+  list: EnforcementRow[];
+  matched: number;
+};
+
+// A median of fewer penalties than this is not a useful benchmark.
+const BENCHMARK_MIN = 3;
+
+const PenaltyTable = ({ rows, filters }: { rows: PenaltyBenchmark[]; filters: EnforcementFilters }) =>
+  rows.length === 0 ? null : (
+    <>
+      <h2>Penalties by conduct</h2>
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Conduct</th>
+              <th class="num">Known penalties</th>
+              <th class="num">Median</th>
+              <th class="num">Highest</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr>
+                <td>
+                  <a href={query({ ...filters, page: undefined, offence: row.id })}>{row.label}</a>
+                </td>
+                <td class="num">{row.count}</td>
+                <td class="num">{row.count >= BENCHMARK_MIN ? aud(row.median) : '-'}</td>
+                <td class="num">{aud(row.highest)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p class="note">
+        Amounts that the sources state, for the filters above. The QLD register states no amounts. A median of fewer than {BENCHMARK_MIN} penalties is not shown.
+      </p>
+    </>
+  );
 
 export const EnforcementPage = ({ model, filters, tracking }: { model: EnforcementModel; filters: EnforcementFilters; tracking: TrackingMap }) => (
   <Layout title="Enforcement" path="/enforcement">
@@ -363,6 +464,7 @@ export const EnforcementPage = ({ model, filters, tracking }: { model: Enforceme
       </table>
     </div>
     <p class="note">Counts depend on which registers publish data. Compare groups in one jurisdiction. Records that name a person are not stored.</p>
+    <PenaltyTable rows={model.penalties} filters={filters} />
     <p class="count">{model.matched === 1 ? '1 record' : `${model.matched} records`}</p>
     {model.list.length === 0 ? <div class="empty">No records match these filters.</div> : model.list.map((row) => <EnforcementCard row={row} filters={filters} tracking={tracking} />)}
     <Pager filters={filters} matched={model.matched} />
@@ -540,10 +642,19 @@ export const AboutPage = ({ sources }: { sources: number }) => (
           <b>Most important first.</b> Ranked by effect on your operations.
         </li>
         <li>
-          <b>Deadlines flagged.</b> See what needs action or invites submissions.
+          <b>Deadlines flagged.</b> See what needs action or invites submissions. <a href="/deadlines">Deadlines</a> lists the close dates and start dates.
         </li>
         <li>
-          <b>Competitor watch.</b> Fines and prosecutions, grouped by company.
+          <b>JJ Richards first.</b> Items that name JJ Richards are always shown, at the top.
+        </li>
+        <li>
+          <b>Competitor watch.</b> Fines and prosecutions, grouped by company. Changes that name a competitor have a tag.
+        </li>
+        <li>
+          <b>Penalty benchmarks.</b> The median and highest known penalty for each type of conduct, on the Enforcement page.
+        </li>
+        <li>
+          <b>Quarterly report.</b> A one-page summary to print or save as PDF, on the <a href="/report">Report</a> page.
         </li>
         <li>
           <b>Ask questions.</b> Search in plain words.
@@ -556,10 +667,13 @@ export const AboutPage = ({ sources }: { sources: number }) => (
       <h2 id="priority">Priority</h2>
       <p>An AI model reads each item and asks two things:</p>
       <ul>
-        <li>How much is it about waste?</li>
+        <li>How much is it about waste, or about a rule for your trucks and drivers?</li>
         <li>How much does it change your operations?</li>
       </ul>
       <p>Items that need action or invite submissions rank higher. Each card shows why, for example "High priority · About waste · Compliance change".</p>
+      <p>
+        Click "Useful to you?" on a card to rate it. <a href="/labels">Priority check</a> shows how many items in each priority band you rated useful.
+      </p>
 
       <h2 id="summaries">Summaries</h2>
       <p>An AI model writes the short summary on most cards: what changed, then key dates, amounts and who must act. Other cards show the start of the source text.</p>
@@ -585,3 +699,254 @@ export const AboutPage = ({ sources }: { sources: number }) => (
     </div>
   </Layout>
 );
+
+const DATE_TYPE_LABELS: Record<DateEntry['type'], string> = { closes: 'Submissions close', starts: 'Starts to apply' };
+
+export const DEADLINE_PERIODS = [
+  [30, 'Next 30 days'],
+  [90, 'Next 90 days'],
+  [365, 'Next 12 months'],
+] as const;
+
+const DateTable = ({ entries }: { entries: DateEntry[] }) => (
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>What</th>
+          <th>Item</th>
+          <th>Where</th>
+          <th>Priority</th>
+        </tr>
+      </thead>
+      <tbody>
+        {entries.map((entry) => (
+          <tr>
+            <td class="nowrap">{date(entry.date)}</td>
+            <td class="nowrap">{DATE_TYPE_LABELS[entry.type]}</td>
+            <td>
+              <Title item={entry.row.item} text={entry.row.item.title} />
+            </td>
+            <td>{entry.row.item.jurisdiction}</td>
+            <td>
+              <div class={`prio ${entry.row.level}`}>{PRIORITY_LABELS[entry.row.level].replace(' priority', '')}</div>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+);
+
+export const DeadlinesPage = ({ entries, days }: { entries: DateEntry[]; days: number }) => (
+  <Layout title="Deadlines" path="/deadlines">
+    <h1>Deadlines</h1>
+    <p class="sub">Submission close dates and start dates, from the text of relevant regulatory items. Soonest first.</p>
+    <form class="filters" method="get">
+      <Select name="days" label="Period" value={days} options={DEADLINE_PERIODS} blank={null} />
+      <NoScriptApply />
+    </form>
+    <p class="count">{entries.length === 1 ? '1 date' : `${entries.length} dates`}</p>
+    {entries.length === 0 ? <div class="empty">No dates in this period.</div> : <DateTable entries={entries} />}
+    <p class="note">An AI model selects each date from the dates in the source text. Check the source before you act. A date that the source does not state is not shown.</p>
+  </Layout>
+);
+
+const BAND_LABELS: Record<BandStat['band'], string> = { high: 'High', medium: 'Medium', low: 'Low', hidden: 'Hidden (probably not relevant)' };
+
+const percent = (part: number, whole: number) => (whole === 0 ? '-' : `${Math.round((part / whole) * 100)}%`);
+
+// Fewer labels than this give a percentage that can change much with one more label.
+const LABELS_MIN = 20;
+
+export const LabelsPage = ({ stats }: { stats: BandStat[] }) => (
+  <Layout title="Priority check" path="/labels">
+    <div class="about">
+      <h1>Priority check</h1>
+      <p class="sub">How well the priority matches your judgment. Click "Useful to you?" on the cards in Regulatory changes.</p>
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Priority</th>
+              <th class="num">Labelled</th>
+              <th class="num">Useful</th>
+              <th class="num">Useful share</th>
+            </tr>
+          </thead>
+          <tbody>
+            {stats.map((band) => (
+              <tr>
+                <td>{BAND_LABELS[band.band]}</td>
+                <td class="num">{band.count}</td>
+                <td class="num">{band.useful}</td>
+                <td class="num">{percent(band.useful, band.count)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <h2>How to read this</h2>
+      <ul>
+        <li>High should be almost all useful. If it is not, the types below show which kinds of item to move down.</li>
+        <li>Hidden should be almost all not useful. A useful hidden item is one the dashboard does not show you.</li>
+        <li>
+          Label at least {LABELS_MIN} items in each row. To label hidden items, use "Also show items that are probably not relevant" at the bottom of{' '}
+          <a href="/changes">Regulatory changes</a>.
+        </li>
+      </ul>
+      {stats
+        .filter((band) => band.count > 0)
+        .map((band) => (
+          <>
+            <h2>{BAND_LABELS[band.band]}: by type</h2>
+            <div class="scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Type</th>
+                    <th class="num">Labelled</th>
+                    <th class="num">Useful share</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {band.types.map((t) => (
+                    <tr>
+                      <td>{ITEM_TYPE_LABELS[t.type] ?? t.type}</td>
+                      <td class="num">{t.count}</td>
+                      <td class="num">{percent(t.useful, t.count)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        ))}
+    </div>
+  </Layout>
+);
+
+export type ReportModel = {
+  quarter: string;
+  quarters: string[];
+  label: string;
+  counts: { relevant: number; high: number; action: number; submissions: number };
+  changes: ChangeRow[];
+  dates: DateEntry[];
+  named: StoredItem[];
+  groups: ReturnType<typeof groupTable>;
+  acting: { item: StoredItem; tracking: Tracking }[];
+};
+
+const Stat = ({ value, text }: { value: number; text: string }) => (
+  <div class="stat">
+    <div class="value">{value}</div>
+    <div class="note">{text}</div>
+  </div>
+);
+
+export const ReportPage = ({ model }: { model: ReportModel }) => {
+  const jjr = model.groups.find((g) => g.id === 'jjr');
+  const competitors = model.groups.filter((g) => g.id !== 'jjr' && g.id !== 'other');
+  return (
+    <Layout title={`Report ${model.label}`} path="/report">
+      <form class="filters no-print" method="get">
+        <Select name="quarter" label="Quarter" value={model.quarter} options={model.quarters.map((q) => [q, q] as const)} blank={null} />
+        <NoScriptApply />
+        <button type="button" onclick="window.print()">
+          Print or save as PDF
+        </button>
+      </form>
+      <h1>Regulatory and enforcement summary</h1>
+      <p class="sub">{model.label}. From public Australian sources. Check each source before you act.</p>
+
+      <div class="stats">
+        <Stat value={model.counts.high} text="High priority changes" />
+        <Stat value={model.counts.action} text="May need action" />
+        <Stat value={model.counts.submissions} text="Invite submissions" />
+        <Stat value={jjr?.count ?? 0} text="Enforcement records against JJ Richards" />
+      </div>
+
+      <h2>Important changes</h2>
+      {model.changes.length === 0 ? (
+        <div class="empty">No high priority changes in this quarter.</div>
+      ) : (
+        <ul class="report-list">
+          {model.changes.map((row) => (
+            <li>
+              <Title item={row.item} text={row.item.title} />
+              <div class="note">
+                {row.item.jurisdiction} · {date(row.item.publishedAt)} · {ITEM_TYPE_LABELS[row.answers.itemType.choice] ?? row.answers.itemType.choice}
+                {row.item.partyGroup !== null && ` · Names ${GROUP_LABELS[row.item.partyGroup] ?? row.item.partyGroup}`}
+              </div>
+              {row.item.summary !== null && <div>{row.item.summary.what}</div>}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <h2>Coming dates (next 90 days)</h2>
+      {model.dates.length === 0 ? <div class="empty">No dates in the next 90 days.</div> : <DateTable entries={model.dates} />}
+
+      <h2>Enforcement against JJ Richards and competitors</h2>
+      {jjr === undefined || jjr.count === 0 ? <p>No enforcement records against JJ Richards in the sources for this quarter.</p> : null}
+      {competitors.length === 0 ? (
+        <p>No enforcement records against the listed competitors in this quarter.</p>
+      ) : (
+        <div class="scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Company group</th>
+                <th class="num">Records</th>
+                <th class="num">Harm or serious</th>
+                <th class="num">Known penalties</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[...(jjr !== undefined && jjr.count > 0 ? [jjr] : []), ...competitors].map((g) => (
+                <tr class={g.id === 'jjr' ? 'self' : ''}>
+                  <td>{g.label}</td>
+                  <td class="num">{g.count}</td>
+                  <td class="num">{g.serious}</td>
+                  <td class="num">{g.penaltyTotal > 0 ? aud(g.penaltyTotal) : '-'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {model.named.length > 0 && (
+        <ul class="report-list">
+          {model.named.map((item) => (
+            <li>
+              <Title item={item} text={item.party ?? item.title} />
+              <div class="note">
+                {item.jurisdiction} · {date(item.publishedAt)} · {item.action}
+                {item.penaltyAud !== null && ` · ${aud(item.penaltyAud)}`}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {(model.groups.find((g) => g.id === 'other')?.count ?? 0) > 0 && (
+        <p class="note">Other waste operators had {model.groups.find((g) => g.id === 'other')?.count} enforcement records in this quarter.</p>
+      )}
+
+      <h2>Open actions</h2>
+      {model.acting.length === 0 ? (
+        <p>No bookmarked items with the status Acting.</p>
+      ) : (
+        <ul class="report-list">
+          {model.acting.map(({ item, tracking }) => (
+            <li>
+              <Title item={item} text={item.party ?? item.title} />
+              {tracking.note !== '' && <div>{tracking.note}</div>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Layout>
+  );
+};

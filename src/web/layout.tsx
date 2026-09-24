@@ -93,12 +93,31 @@ tr.self td { font-weight: 650; }
 .login h1 img { height: 3rem; margin-block: -4px; }
 .error { color: var(--bad); }
 .pager { display: flex; justify-content: space-between; align-items: center; margin-top: 16px; }
+.nowrap { white-space: nowrap; }
+td .title { font-weight: 600; color: var(--text); }
+form.label { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 12px; }
+form.label button { padding: 2px 12px; font-size: 14px; }
+form.label button.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); font-weight: 600; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 8px; }
+.stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+.stat .value { font-size: 32px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.report-list { padding-left: 20px; }
+.report-list li { margin-bottom: 12px; }
+@media print {
+  .top, .no-print, dialog, .bookmark, form.label { display: none !important; }
+  body { background: #fff; color: #000; font-size: 12pt; }
+  .page { padding: 0; max-width: none; }
+  .stat, table { border-color: #999; }
+  a { color: #000; }
+}
 `;
 
 const NAV = [
   { href: '/changes', label: 'Regulatory changes' },
   { href: '/enforcement', label: 'Enforcement' },
+  { href: '/deadlines', label: 'Deadlines' },
   { href: '/tracked', label: 'Bookmarks' },
+  { href: '/report', label: 'Report' },
 ] as const;
 
 const INTRO_KEY = 'trashboard_intro';
@@ -169,6 +188,7 @@ export const Layout = ({ title, path, query = '', children }: { title: string; p
             <div class="items">
               <a href="/about">About Trashboard</a>
               <button type="button" onclick="document.getElementById('intro').showModal()">Show welcome</button>
+              <a href="/labels">Priority check</a>
               <a href="/sources">Sources and runs</a>
               <a href="/logout">Log out</a>
             </div>

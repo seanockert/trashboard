@@ -2,6 +2,7 @@ import { TypeSafeClient } from '@typesafe-ai/sdk';
 import { ResultAsync } from 'neverthrow';
 import { match } from 'ts-pattern';
 import type { StoredItem } from '../items';
+import { closesQuestion, dateCandidates, selectedDate, startsQuestion } from './dates';
 import { penaltyCandidates, penaltyQuestion, selectedPenalty } from './penalty';
 import { ENFORCEMENT_QUESTIONS, REGULATORY_QUESTIONS } from './questions';
 
@@ -13,8 +14,8 @@ export const makeClient = (apiKey: string) => new TypeSafeClient({ apiKey, defau
 
 export type TagError = { type: 'jev_failed'; itemId: string; cause: unknown };
 
-// `penaltyAud` is set only when Jev selected an amount from the source text.
-export type Tagged = { itemId: string; answers: unknown; inputTokens: number; penaltyAud: number | null };
+// `penaltyAud`, `closesOn` and `startsOn` are set only when Jev selected a value from the source text.
+export type Tagged = { itemId: string; answers: unknown; inputTokens: number; penaltyAud: number | null; closesOn: string | null; startsOn: string | null };
 
 // Jev sees the source text and the facts from the source. It does not see
 // the party group, because code decides that from the name.
@@ -47,25 +48,41 @@ const askEnforcement = async ({ client, item }: { client: TypeSafeClient; item: 
   const state = enforcementState(item);
   if (candidates.length === 0) {
     const res = await client.systemOne({ state, questions: ENFORCEMENT_QUESTIONS });
-    return { answers: res.answers, inputTokens: res.usage.input_tokens, penaltyAud: null };
+    return { answers: res.answers, inputTokens: res.usage.input_tokens, penaltyAud: null, closesOn: null, startsOn: null };
   }
   const res = await client.systemOne({ state, questions: { ...ENFORCEMENT_QUESTIONS, penalty: penaltyQuestion(candidates) } });
   return {
     answers: res.answers,
     inputTokens: res.usage.input_tokens,
     penaltyAud: selectedPenalty({ candidates, answer: res.answers.penalty }),
+    closesOn: null,
+    startsOn: null,
+  };
+};
+
+// A start date has a meaning only for these item types. In a news item or an enforcement report, it is often the date of an event.
+const RULE_TYPES: ReadonlySet<string> = new Set(['law', 'bill', 'consultation', 'guidance', 'licence']);
+
+const askRegulatory = async ({ client, item }: { client: TypeSafeClient; item: StoredItem }): Promise<Asked> => {
+  const candidates = dateCandidates(`${item.title}\n${item.body}`, item.publishedAt);
+  const state = regulatoryState(item);
+  if (candidates.length === 0) {
+    const res = await client.systemOne({ state, questions: REGULATORY_QUESTIONS });
+    return { answers: res.answers, inputTokens: res.usage.input_tokens, penaltyAud: null, closesOn: null, startsOn: null };
+  }
+  const res = await client.systemOne({ state, questions: { ...REGULATORY_QUESTIONS, closes: closesQuestion(candidates), starts: startsQuestion(candidates) } });
+  return {
+    answers: res.answers,
+    inputTokens: res.usage.input_tokens,
+    penaltyAud: null,
+    closesOn: selectedDate({ candidates, answer: res.answers.closes }),
+    startsOn: RULE_TYPES.has(res.answers.itemType.choice) ? selectedDate({ candidates, answer: res.answers.starts }) : null,
   };
 };
 
 const ask = ({ client, item }: { client: TypeSafeClient; item: StoredItem }): Promise<Asked> =>
   match(item.kind)
-    .with('regulatory', () =>
-      client.systemOne({ state: regulatoryState(item), questions: REGULATORY_QUESTIONS }).then((res): Asked => ({
-        answers: res.answers,
-        inputTokens: res.usage.input_tokens,
-        penaltyAud: null,
-      })),
-    )
+    .with('regulatory', () => askRegulatory({ client, item }))
     .with('enforcement', () => askEnforcement({ client, item }))
     .exhaustive();
 

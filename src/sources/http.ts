@@ -33,3 +33,18 @@ export const getBytes = ({ url, headers = {} }: { url: string; headers?: Record<
     })),
     (cause): SourceError => ({ type: 'network', url, cause }),
   ).andThen((res) => (res.status >= 200 && res.status < 300 ? okAsync(res.bytes) : errAsync<Uint8Array, SourceError>({ type: 'http', url, status: res.status })));
+
+export const postJson = ({ url, body, headers = {} }: { url: string; body: unknown; headers?: Record<string, string> }) =>
+  ResultAsync.fromPromise(
+    fetch(url, { method: 'POST', body: JSON.stringify(body), headers: { 'user-agent': USER_AGENT, 'content-type': 'application/json', accept: 'application/json', ...headers } }).then(
+      async (res) => ({ status: res.status, text: await res.text() }),
+    ),
+    (cause): SourceError => ({ type: 'network', url, cause }),
+  )
+    .andThen((res) => (res.status >= 200 && res.status < 300 ? okAsync(res) : errAsync<{ status: number; text: string }, SourceError>({ type: 'http', url, status: res.status })))
+    .andThen((res) =>
+      ResultAsync.fromPromise(
+        Promise.resolve().then((): unknown => JSON.parse(res.text)),
+        (): SourceError => ({ type: 'parse', url, message: 'The response is not valid JSON.' }),
+      ).map((json) => ({ text: res.text, json })),
+    );

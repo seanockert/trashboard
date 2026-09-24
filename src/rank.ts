@@ -26,14 +26,21 @@ const answer = (path: string) => `COALESCE(json_extract(answers, '$.${path}'), 0
 const P_WASTE = answer('wasteFocus.probabilities."3"');
 const P_ENVIRONMENT = answer('wasteFocus.probabilities."2"');
 
-// Level 3 counts in full and level 2 counts half.
-export const RELEVANCE_SQL = `(${P_WASTE} + 0.5 * ${P_ENVIRONMENT})`;
+// Probability that the item changes a rule for the trucks or drivers of the company.
+const P_FLEET = answer('fleetRule.noul');
+
+// Level 3 counts in full and level 2 counts half. A rule for the fleet counts as much as its probability.
+export const RELEVANCE_SQL = `MAX(${P_WASTE} + 0.5 * ${P_ENVIRONMENT}, ${P_FLEET})`;
 
 // Relevance is a gate and a multiplier. An item that is probably not relevant
 // cannot rise because of a high impact score. The impact Score has 5 levels, 0 to 4.
 export const PRIORITY_SQL = `(${RELEVANCE_SQL} * (${WEIGHTS.impact} * ${answer('impact.score')} / 4.0 + ${WEIGHTS.action} * ${answer('actionRequired.noul')} + ${WEIGHTS.submissions} * ${answer('submissionsOpen.noul')}) / ${WEIGHTS.impact + WEIGHTS.action + WEIGHTS.submissions})`;
 
-export const IS_RELEVANT_SQL = `(${P_WASTE} + ${P_ENVIRONMENT} >= ${RELEVANT_MIN} AND ${PRIORITY_SQL} >= ${PRIORITY_MIN})`;
+// An item that names JJ Richards is always relevant.
+export const IS_RELEVANT_SQL = `(((${P_WASTE} + ${P_ENVIRONMENT} >= ${RELEVANT_MIN} OR ${P_FLEET} >= ${FLAG_MIN}) AND ${PRIORITY_SQL} >= ${PRIORITY_MIN}) OR party_group IS 'jjr')`;
+
+// The badge band of a regulatory item. "hidden" is below the relevance gate.
+export const PRIORITY_BAND_SQL = `(CASE WHEN NOT ${IS_RELEVANT_SQL} THEN 'hidden' WHEN ${PRIORITY_SQL} >= ${PRIORITY_HIGH} THEN 'high' WHEN ${PRIORITY_SQL} >= ${PRIORITY_MEDIUM} THEN 'medium' ELSE 'low' END)`;
 
 // Only known answer keys can go into the SQL.
 export type FlagKey = (typeof LINES_OF_BUSINESS)[number] | (typeof TOPICS)[number] | 'actionRequired' | 'submissionsOpen';

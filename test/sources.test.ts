@@ -23,14 +23,16 @@ describe('QLD enforcement register', () => {
     row('STAT-1', { Activities: 'ERA 60 - Waste disposal' }),
     row('STAT-1', { 'Enforcement Type': 'Environmental Protection Order (EPO)', 'Issued Date': '2024-11-05 00:00:00', Status: 'Open' }),
     row('STAT-2', { 'Enforcement Type': 'Clean-up Notice', Activities: 'ERA 16 - Extractive activities' }),
+    row('STAT-3', { Activities: 'ERA 63 - Sewage Treatment' }),
+    row('STAT-4', { Activities: 'ERA 62 - Resource recovery and transfer facility operation' }),
   ]);
 
   it('groups rows by reference and keeps the first date', () => {
-    expect(records).toHaveLength(2);
+    expect(records).toHaveLength(4);
     expect(records[0]).toMatchObject({ externalId: 'STAT-1', publishedAt: '2024-08-07', party: 'Example Waste Pty Ltd' });
     expect(records[0]?.action).toBe('Direction Notice; Environmental Protection Order (EPO)');
   });
-  it('marks waste activities from the ERA code', () => expect(records.map((r) => r.wasteActivity)).toEqual([true, false]));
+  it('marks waste activities from the ERA code, but not sewage treatment', () => expect(records.map((r) => r.wasteActivity)).toEqual([true, false, false, true]));
   it('gives valid items', () => records.forEach((r) => expect(NewItem.safeParse(r).success).toBe(true)));
 });
 

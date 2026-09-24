@@ -22,13 +22,17 @@ CREATE TABLE items (
   tagged_at       TEXT,
   answers         TEXT,                      -- JSON: raw Jev answers, keyed by question id
   summary         TEXT,                      -- JSON: AI card summary { what, points }. NULL until made or after a text change
-  summary_version INTEGER                    -- NULL until the summary step runs
+  summary_version INTEGER,                   -- NULL until the summary step runs
+  closes_on       TEXT,                      -- regulatory: the last day for submissions. NULL when the text states no such date
+  starts_on       TEXT                       -- regulatory: the day the rule starts to apply. NULL when the text states no such date
 );
 
 CREATE INDEX items_kind_date ON items (kind, published_at DESC);
 CREATE INDEX items_untagged ON items (tag_version) WHERE tag_version IS NULL;
 CREATE INDEX items_party_group ON items (party_group) WHERE party_group IS NOT NULL;
 CREATE INDEX items_source ON items (source_id);
+CREATE INDEX items_closes_on ON items (closes_on) WHERE closes_on IS NOT NULL;
+CREATE INDEX items_starts_on ON items (starts_on) WHERE starts_on IS NOT NULL;
 
 CREATE VIRTUAL TABLE items_fts USING fts5(
   title, body, party,
@@ -74,5 +78,12 @@ CREATE TABLE tracked (
   item_id    TEXT PRIMARY KEY REFERENCES items (id) ON DELETE CASCADE,
   status     TEXT NOT NULL CHECK (status IN ('watching', 'acting')),
   note       TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL
+);
+
+-- The user's rating of an item, to measure the priority. The row stays when tags change.
+CREATE TABLE labels (
+  item_id    TEXT PRIMARY KEY REFERENCES items (id) ON DELETE CASCADE,
+  useful     INTEGER NOT NULL CHECK (useful IN (0, 1)),
   updated_at TEXT NOT NULL
 );

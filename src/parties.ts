@@ -70,3 +70,15 @@ export const isCompanyName = (name: string): boolean =>
     .map((part) => part.trim())
     .filter((part) => part !== '')
     .every((part) => COMPANY_MARKER.test(part));
+
+const JJR = PARTY_GROUPS[0];
+
+// Aliases that are also common words in titles, for example "Time to rethink packaging".
+const COMMON_WORD_ALIASES = /\brethink\b/gi;
+
+// The group that a regulatory item names. A competitor counts only in the
+// title, because a body can name a company in passing, and some aliases are
+// common words. JJ Richards counts in the body too, and first, thus the user
+// sees every item about the company.
+export const mentionedGroup = ({ title, body }: { title: string; body: string }): PartyGroupId | null =>
+  JJR.pattern.test(`${title}\n${body}`) ? JJR.id : findPartyGroup(title.replace(COMMON_WORD_ALIASES, ' '));

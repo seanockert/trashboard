@@ -2,7 +2,7 @@ import { choice, noul, score } from '@typesafe-ai/sdk';
 
 // Increase this when a question or the state changes. Items with an older
 // version get new tags, thus two meanings of one answer never mix.
-export const TAG_VERSION = 2;
+export const TAG_VERSION = 4;
 
 const READER =
   'The reader is the in-house legal counsel of a large Australian waste management company. ' +
@@ -58,6 +58,7 @@ export const REGULATORY_QUESTIONS = {
       bill: 'A bill in parliament that is not law yet.',
       consultation: 'A draft, discussion paper or request for public submissions.',
       guidance: 'Guidance, a policy, a standard or a position statement from a regulator.',
+      licence: 'A licence, permit or environmental authority for one company or site that is issued, amended, varied, transferred, suspended or surrendered.',
       enforcement: 'A report of a prosecution, fine, penalty notice, order or other enforcement action.',
       news: 'A general announcement, grant, program, report or event.',
     },
@@ -70,6 +71,18 @@ export const REGULATORY_QUESTIONS = {
     context: READER,
     question: 'Does `item` invite the public or industry to make a submission or comment?',
   }),
+  // `wasteFocus` rates a rule for all vehicles as general, thus this question
+  // finds the vehicle rules that apply to the fleet of the company.
+  fleetRule: noul(
+    {
+      context: READER,
+      question: "Does `item` change a rule for the company's own trucks or drivers?",
+    },
+    {
+      true: 'A rule for rigid trucks or truck and trailer combinations on general access roads, for example waste compactors, skip, hook-lift and tanker trucks: driver fatigue, work diaries, driver licences, chain of responsibility, road user charges, registration fees, vehicle standards, truck bans on a road, or mass limits for these trucks.',
+      false: 'Not a vehicle rule, or a permit, route map or exemption only for other vehicles, for example road trains, B-doubles, cranes, livestock or vehicle carriers, or for one named operator.',
+    },
+  ),
 
   lobCollection: lineOfBusiness('collection and transport of household and commercial waste'),
   lobRecycling: lineOfBusiness('recycling, material recovery facilities, organics and FOGO'),
@@ -94,8 +107,9 @@ export const ENFORCEMENT_QUESTIONS = {
   wasteOperator: noul(
     { question: 'Does `record` show that `record.party` collects, transports, sorts, recycles, treats or disposes of waste as a business?' },
     {
-      true: 'The party name, the activities, the location or the description shows a waste business, for example a waste company, a landfill, a transfer station, a recycler or a liquid waste treatment plant.',
-      false: 'The party is in another industry, or the record does not show what the party does.',
+      true: 'The party name, the activities, the location or the description shows a waste business that accepts waste from others, for example a waste company, a landfill, a transfer station, a recycler or a liquid waste treatment plant.',
+      false:
+        'The party is in another industry, for example a sewage or water treatment plant, a mine, a factory or a farm that manages only its own waste, or the record does not show what the party does.',
     },
   ),
   offence: choice(
@@ -113,6 +127,7 @@ export const ENFORCEMENT_QUESTIONS = {
       contamination: 'Contaminated land, PFAS, asbestos or chemicals.',
       transport: 'Transport of waste, or waste tracking.',
       levy: 'The waste levy.',
+      safety: 'Work health and safety, for example a worker who was injured or killed, or a failure to control a risk to workers.',
       other: 'Other conduct.',
       unknown: 'The record gives only the type of notice and does not say what the conduct was.',
     },
@@ -120,10 +135,10 @@ export const ENFORCEMENT_QUESTIONS = {
   severity: score(
     { question: 'How serious is the conduct in `record`?' },
     [
-      'An administrative matter with no harm to the environment.',
+      'An administrative matter with no harm to the environment or to people.',
       'A small or short breach with little or no harm.',
-      'A breach that caused, or could cause, harm to the environment or to people nearby.',
-      'Serious or widespread harm, or conduct that was deliberate or repeated.',
+      'A breach that caused, or could cause, harm to the environment, to workers or to people nearby.',
+      'Serious or widespread harm, a death or a serious injury, or conduct that was deliberate or repeated.',
     ],
   ),
   similarRisk: noul({

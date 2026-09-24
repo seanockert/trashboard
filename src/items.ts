@@ -59,4 +59,7 @@ export type StoredItem = {
   wasteActivity: boolean;
   answers: unknown;
   summary: Summary | null;
+  // Regulatory: dates that the source text states, selected by Jev.
+  closesOn: string | null;
+  startsOn: string | null;
 };

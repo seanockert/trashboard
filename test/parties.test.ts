@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findPartyGroup, isCompanyName } from '../src/parties';
+import { findPartyGroup, isCompanyName, mentionedGroup } from '../src/parties';
 
 describe('isCompanyName', () => {
   it.each([
@@ -45,4 +45,13 @@ describe('findPartyGroup', () => {
     ['Richards Road Pty Ltd', null],
     ['Bingo Nominees Pty Ltd', null],
   ])('%s -> %s', (name, group) => expect(findPartyGroup(name)).toBe(group));
+});
+
+describe('mentionedGroup', () => {
+  it.each([
+    [{ title: 'Notice of Variation of Licence – Cleanaway Operations Pty Ltd (No 49 of 2026)', body: '' }, 'cleanaway'],
+    [{ title: 'Council awards new collection contract', body: 'The council chose J.J. Richards & Sons for the work.' }, 'jjr'],
+    [{ title: 'Veolia issued Clean Up Notice', body: 'JJ Richards also operates in the area.' }, 'jjr'],
+    [{ title: 'Time to rethink packaging', body: 'Veolia and Suez gave comments.' }, null],
+  ])('%o -> %s', (item, group) => expect(mentionedGroup(item)).toBe(group));
 });

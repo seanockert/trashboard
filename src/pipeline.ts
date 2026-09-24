@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { match } from 'ts-pattern';
 import { readSecrets } from './env';
 import { BODY_MAX, NewItem, type StoredItem } from './items';
-import { isCompanyName } from './parties';
+import { isCompanyName, mentionedGroup } from './parties';
 import { deleteParties, getCursor, getItems, recordRun, saveAnswers, saveDetail, saveSummary, unsummarisedIds, untaggedIds, upsertItems } from './db';
 import { makeClient, tagItem, USD_PER_MILLION_INPUT_TOKENS } from './jev/tag';
 import { TAG_VERSION } from './jev/questions';
@@ -187,7 +187,12 @@ export const processItems = async ({ env, itemIds, detailRequired }: { env: Env;
 
   const results = await Promise.all(ready.map(tagItem(client)));
   const now = new Date();
-  await Promise.all(results.flatMap((result) => (result.isOk() ? [saveAnswers(env.DB)({ ...result.value, version: TAG_VERSION, now })] : [])));
+  await Promise.all(
+    results.flatMap((result, i) => {
+      const item = ready[i];
+      return result.isOk() && item !== undefined ? [saveAnswers(env.DB)({ ...result.value, version: TAG_VERSION, now, mentioned: mentionedGroup(item) })] : [];
+    }),
+  );
   const tagFailures = results.flatMap((result) => (result.isErr() ? [result.error] : []));
   const failedIds = new Set(tagFailures.map((failure) => failure.itemId));
   await summariseItems({ env, items: ready.filter((item) => !failedIds.has(item.id)) });

@@ -2,7 +2,20 @@ import { Hono } from 'hono';
 import { secureHeaders } from 'hono/secure-headers';
 import { z } from 'zod';
 import { TrackStatus } from '../items';
-import { countUntagged, enforcementPage, latestRuns, regulatoryPage, saveTracking, trackedItems, trackingFor } from '../db';
+import {
+  countUntagged,
+  enforcementPage,
+  labelsFor,
+  labelStats,
+  latestRuns,
+  regulatoryPage,
+  reportData,
+  saveLabel,
+  saveTracking,
+  trackedItems,
+  trackingFor,
+  upcomingDates,
+} from '../db';
 import { readSecrets } from '../env';
 import { TAG_VERSION } from '../jev/questions';
 import { makeClient } from '../jev/tag';
@@ -11,17 +24,36 @@ import { search } from '../search';
 import { SOURCES } from '../sources';
 import { checkPassword, endSession, requireSession, startSession } from './auth';
 import {
+  bandStats,
   ChangesFilters,
   changesFlags,
+  dateEntries,
   EnforcementFilters,
   groupTable,
   offenceChips,
   PAGE_SIZE,
+  penaltyBenchmarks,
+  Quarter,
+  quarterOf,
+  quarterRange,
+  recentQuarters,
   sinceDate,
   toChangeRows,
   toEnforcementRows,
 } from './models';
-import { AboutPage, ChangesPage, EnforcementPage, LoginPage, SearchPage, SourcesPage, TrackedPage } from './pages';
+import {
+  AboutPage,
+  ChangesPage,
+  DEADLINE_PERIODS,
+  DeadlinesPage,
+  EnforcementPage,
+  LabelsPage,
+  LoginPage,
+  ReportPage,
+  SearchPage,
+  SourcesPage,
+  TrackedPage,
+} from './pages';
 
 export const app = new Hono<{ Bindings: Env }>();
 
@@ -54,13 +86,15 @@ app.get('/changes', async (c) => {
     since: sinceDate(filters.days, new Date()),
     version: TAG_VERSION,
     jurisdiction: filters.jurisdiction,
+    company: filters.company,
     flags: changesFlags(filters),
     relevantOnly: filters.all !== '1',
     limit: PAGE_SIZE,
     offset: (filters.page - 1) * PAGE_SIZE,
   });
-  const tracking = await trackingFor(c.env.DB)(result.rows.map((r) => r.item.id));
-  return c.html(<ChangesPage rows={toChangeRows(result.rows)} matched={result.matched} filters={filters} tracking={tracking} />);
+  const ids = result.rows.map((r) => r.item.id);
+  const [tracking, labels] = await Promise.all([trackingFor(c.env.DB)(ids), labelsFor(c.env.DB)(ids)]);
+  return c.html(<ChangesPage rows={toChangeRows(result.rows)} matched={result.matched} filters={filters} tracking={tracking} labels={labels} />);
 });
 
 app.get('/enforcement', async (c) => {
@@ -75,7 +109,13 @@ app.get('/enforcement', async (c) => {
     limit: PAGE_SIZE,
     offset: (filters.page - 1) * PAGE_SIZE,
   });
-  const model = { groups: groupTable(result.groups), offences: offenceChips(result.offences), list: toEnforcementRows(result.rows), matched: result.matched };
+  const model = {
+    groups: groupTable(result.groups),
+    offences: offenceChips(result.offences),
+    penalties: penaltyBenchmarks(result.penalties),
+    list: toEnforcementRows(result.rows),
+    matched: result.matched,
+  };
   const tracking = await trackingFor(c.env.DB)(result.rows.map((item) => item.id));
   return c.html(<EnforcementPage model={model} filters={filters} tracking={tracking} />);
 });
@@ -100,6 +140,60 @@ app.post('/track', async (c) => {
   const { itemId, status, note, stop, back } = form.data;
   await saveTracking(c.env.DB)({ itemId, status: stop === '1' ? null : status, note: note.trim(), now: new Date() });
   return c.redirect(safeNext(back));
+});
+
+const isoDay = (date: Date) => date.toISOString().slice(0, 10);
+const addDays = (date: Date, days: number) => new Date(date.getTime() + days * 86_400_000);
+
+const DeadlineFilters = z.object({ days: z.coerce.number().pipe(z.union(DEADLINE_PERIODS.map(([d]) => z.literal(d)))).catch(90) });
+
+app.get('/deadlines', async (c) => {
+  const { days } = DeadlineFilters.parse(c.req.query());
+  const now = new Date();
+  const range = { from: isoDay(now), to: isoDay(addDays(now, days)) };
+  const rows = toChangeRows(await upcomingDates(c.env.DB)({ version: TAG_VERSION, ...range }));
+  return c.html(<DeadlinesPage entries={dateEntries({ rows, ...range })} days={days} />);
+});
+
+app.post('/label', async (c) => {
+  const form = z
+    .object({ itemId: z.string().min(1).max(500), useful: z.enum(['1', '0', 'clear']), back: z.string().optional() })
+    .safeParse(await c.req.parseBody());
+  if (!form.success) return c.text('Bad request', 400);
+  const { itemId, useful, back } = form.data;
+  await saveLabel(c.env.DB)({ itemId, useful: useful === 'clear' ? null : useful === '1', now: new Date() });
+  return c.redirect(safeNext(back));
+});
+
+app.get('/labels', async (c) => c.html(<LabelsPage stats={bandStats(await labelStats(c.env.DB)(TAG_VERSION))} />));
+
+const REPORT_QUARTERS = 8;
+const REPORT_DATE_DAYS = 90;
+
+app.get('/report', async (c) => {
+  const now = new Date();
+  const quarters = recentQuarters(now, REPORT_QUARTERS);
+  const asked = Quarter.safeParse(c.req.query('quarter'));
+  const quarter = asked.success && quarters.includes(asked.data) ? asked.data : quarterOf(now);
+  const { from, to, label } = quarterRange(quarter);
+  const dateRange = { from: isoDay(now), to: isoDay(addDays(now, REPORT_DATE_DAYS)) };
+  const [data, dated, tracked] = await Promise.all([
+    reportData(c.env.DB)({ version: TAG_VERSION, from, to }),
+    upcomingDates(c.env.DB)({ version: TAG_VERSION, ...dateRange }),
+    trackedItems(c.env.DB)(),
+  ]);
+  const model = {
+    quarter,
+    quarters,
+    label,
+    counts: data.counts,
+    changes: toChangeRows(data.changes),
+    dates: dateEntries({ rows: toChangeRows(dated), ...dateRange }),
+    named: data.named,
+    groups: groupTable(data.groups),
+    acting: tracked.filter((row) => row.tracking.status === 'acting'),
+  };
+  return c.html(<ReportPage model={model} />);
 });
 
 app.get('/about', (c) => c.html(<AboutPage sources={SOURCES.length} />));

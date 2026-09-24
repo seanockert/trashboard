@@ -39,6 +39,7 @@ export const OFFENCE_LABELS: Record<string, string> = {
   contamination: 'Contamination',
   transport: 'Transport and tracking',
   levy: 'Waste levy',
+  safety: 'Work health and safety',
   other: 'Other',
   unknown: 'Not stated',
 };
@@ -52,6 +53,7 @@ export const ChangesFilters = z.object({
   lob: optional(z.enum(LINES_OF_BUSINESS)),
   topic: optional(z.enum(TOPICS)),
   need: optional(z.enum(['action', 'submissions'])),
+  company: optional(z.enum([...PARTY_GROUPS.map((g) => g.id), 'any'])),
   all: optional(z.literal('1')),
   page,
 });
@@ -110,7 +112,8 @@ const IMPACT_REASONS = ['No effect on operations', 'Background only', 'Small adm
 // Why an item has its priority, from the Jev answers that make the priority.
 export const priorityReasons = (answers: RegulatoryAnswers): string[] => {
   const focus = Object.entries(answers.wasteFocus.probabilities).toSorted((a, b) => b[1] - a[1])[0]?.[0];
-  return [FOCUS_REASONS[Number(focus)], IMPACT_REASONS[Math.round(answers.impact.score)]].filter((text) => text !== undefined);
+  const focusReason = answers.fleetRule.noul >= FLAG_MIN && Number(focus) < 2 ? 'Rule for your trucks' : FOCUS_REASONS[Number(focus)];
+  return [focusReason, IMPACT_REASONS[Math.round(answers.impact.score)]].filter((text) => text !== undefined);
 };
 
 // Only the rows on the page are parsed. D1 did the filters, the sort and the counts.
@@ -149,4 +152,62 @@ export const offenceChips = (rows: { offence: string | null; n: number }[]) =>
   Object.entries(OFFENCE_LABELS).flatMap(([id, label]) => {
     const n = rows.find((r) => r.offence === id)?.n ?? 0;
     return n > 0 ? [{ id, label, count: n }] : [];
+  });
+
+export type PenaltyBenchmark = { id: string; label: string; count: number; median: number; highest: number };
+
+const median = (sorted: number[]) => {
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? (sorted[mid] ?? 0) : ((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) / 2;
+};
+
+// The known penalties for each type of conduct, most records first.
+export const penaltyBenchmarks = (rows: { offence: string | null; penalty: number }[]): PenaltyBenchmark[] =>
+  Object.entries(Object.groupBy(rows, (r) => r.offence ?? 'unknown'))
+    .flatMap(([id, group]) => {
+      const amounts = (group ?? []).map((r) => r.penalty).toSorted((a, b) => a - b);
+      return amounts.length === 0 ? [] : [{ id, label: OFFENCE_LABELS[id] ?? id, count: amounts.length, median: median(amounts), highest: amounts.at(-1) ?? 0 }];
+    })
+    .toSorted((a, b) => b.count - a.count || b.highest - a.highest);
+
+export type DateEntry = { date: string; type: 'closes' | 'starts'; row: ChangeRow };
+
+// One entry for each date in the range. An item with two dates gives two entries.
+export const dateEntries = ({ rows, from, to }: { rows: ChangeRow[]; from: string; to: string }): DateEntry[] =>
+  rows
+    .flatMap((row) => [
+      ...(row.item.closesOn === null ? [] : [{ date: row.item.closesOn, type: 'closes' as const, row }]),
+      ...(row.item.startsOn === null ? [] : [{ date: row.item.startsOn, type: 'starts' as const, row }]),
+    ])
+    .filter((entry) => entry.date >= from && entry.date <= to)
+    .toSorted((a, b) => a.date.localeCompare(b.date) || b.row.priority - a.row.priority);
+
+export const Quarter = z.string().regex(/^\d{4}-Q[1-4]$/);
+
+const QUARTER_MONTHS = ['January to March', 'April to June', 'July to September', 'October to December'];
+
+export const quarterOf = (date: Date) => `${date.getUTCFullYear()}-Q${Math.floor(date.getUTCMonth() / 3) + 1}`;
+
+export const quarterRange = (quarter: string) => {
+  const year = Number(quarter.slice(0, 4));
+  const q = Number(quarter.slice(-1));
+  const from = new Date(Date.UTC(year, (q - 1) * 3, 1));
+  const to = new Date(Date.UTC(year, q * 3, 0));
+  return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10), label: `${QUARTER_MONTHS[q - 1]} ${year}` };
+};
+
+// The current quarter and the ones before it, newest first.
+export const recentQuarters = (now: Date, count: number) =>
+  Array.from({ length: count }, (_, i) => quarterOf(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 3 * i, 1))));
+
+export type BandStat = { band: 'high' | 'medium' | 'low' | 'hidden'; count: number; useful: number; types: { type: string; count: number; useful: number }[] };
+
+// Labels by priority band. The types show which kinds of item make a band less precise.
+export const bandStats = (rows: { band: BandStat['band']; type: string | null; n: number; useful: number }[]): BandStat[] =>
+  (['high', 'medium', 'low', 'hidden'] as const).map((band) => {
+    const types = rows
+      .filter((r) => r.band === band)
+      .map((r) => ({ type: r.type ?? 'unknown', count: r.n, useful: r.useful }))
+      .toSorted((a, b) => b.count - a.count);
+    return { band, count: types.reduce((sum, t) => sum + t.count, 0), useful: types.reduce((sum, t) => sum + t.useful, 0), types };
   });

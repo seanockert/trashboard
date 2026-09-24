@@ -12,7 +12,7 @@ export const SUMMARY_VERSION = 1;
 
 // Sources with prose text. Other sources give a list of fields, and a
 // summary of those adds nothing to the card.
-const SUMMARY_SOURCES = ['nsw-epa-news', 'epa-vic-news', 'qld-legislation', 'tas-legislation', 'vic-court', 'sa-prosecutions'];
+const SUMMARY_SOURCES = ['nsw-epa-news', 'epa-vic-news', 'qld-legislation', 'tas-legislation', 'vic-court', 'sa-prosecutions', 'worksafe-vic', 'safework-nsw', 'nsw-epa-yoursay', 'engage-vic', 'dcceew-consult', 'dwer-consult'];
 
 // Less text than this gives the model too little to work from.
 const MIN_BODY = 400;

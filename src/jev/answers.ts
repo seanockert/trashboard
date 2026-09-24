@@ -41,6 +41,7 @@ export const RegulatoryAnswers = z.object({
   itemType: Choice(ITEM_TYPES),
   actionRequired: Noul,
   submissionsOpen: Noul,
+  fleetRule: Noul,
   lobCollection: Noul,
   lobRecycling: Noul,
   lobLiquidHazardous: Noul,

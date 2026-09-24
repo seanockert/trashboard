@@ -18,12 +18,17 @@ Workers AI writes a short summary for each card that the views show by default.
 | Part | State |
 | --- | --- |
 | Project setup (TypeScript, Hono, Wrangler, D1, R2, Queues, Cron) | Done |
-| 11 sources (7 regulatory, 4 enforcement) | Done, tested live |
+| 21 sources (14 regulatory, 7 enforcement) | Done, tested live |
 | Regulatory changes view | Done |
 | Enforcement view (JJR and competitors) | Done |
 | Search (D1 full-text search, then Jev rerank) | Done |
 | Password login | Done |
 | Bookmarks (Watching or Acting, with a note) | Done |
+| Deadlines view (submission close dates and start dates from the source text) | Done |
+| Company tag on regulatory items. Items that name JJ Richards are always shown, first | Done |
+| Penalty benchmarks by conduct on the Enforcement view | Done |
+| Quarterly report, to print or save as PDF | Done |
+| Priority check: "Useful to you?" labels and the useful share for each priority band | Done. Needs labels from the user |
 | Card summaries (Workers AI, Llama 3.1 8B) | Done. Not deployed |
 | Unit tests (parsers, company filter, dates, penalty selection, summary checks) | Done, 75 tests |
 | Fit the Workers Free plan (10 ms CPU, 50 subrequests for each invocation) | Done locally. Check real CPU time after deploy |
@@ -45,6 +50,16 @@ Workers AI writes a short summary for each card that the views show by default.
 | EPA Victoria court proceedings | Enforcement | JSON endpoint | Full summary from each page |
 | WA DWER enforcement | Enforcement | HTML tables | Notices, penalty notices, prosecutions |
 | SA EPA prosecutions | Enforcement | HTML table | Needs a browser-like user agent |
+| NSW EPA prosecutions | Enforcement | Salesforce Apex call behind the register search | Not a documented API. One search for each company word ("pty", "ltd" and others), 300 matters for each invocation. Fines for each charge |
+| WorkSafe Victoria prosecution result summaries | Enforcement | JSON search API | Not a documented API. 20 records for each page, newest first |
+| SafeWork NSW prosecutions | Enforcement | HTML, one page for each month | The index gives the month pages. A run reads again the 2 months before the newest date seen |
+| NSW EPA Your Say | Regulatory (consultations) | JSON behind the "load more" list of open projects | Not a documented API. The close date is on each project page, thus the page is the item detail |
+| Engage Victoria | Regulatory (consultations) | Inertia page data as JSON | Not a documented API. Needs the version from the home page. Open projects only. EPA Victoria also uses this site |
+| DCCEEW consultation hub | Regulatory (consultations) | Converlens search call behind the hub page | Not a documented API. Open consultations, with start and end times |
+| WA DWER consultations | Regulatory (consultations) | Citizen Space search API | All consultations, about 40, in one response |
+| QLD environmental authority applications | Regulatory (JJ Richards only) | CKAN datastore SQL | New and amendment applications, with their status |
+| EPA Victoria operating licences | Regulatory (JJ Richards only) | Vicmap WFS | One item for each amendment date |
+| SA EPA licence changes | Regulatory (JJ Richards only) | JSONP feed of all changes | Needs a browser-like user agent and an Accept header with JavaScript. The first run reads back about 12 months |
 
 ## Backfill
 
@@ -85,6 +100,29 @@ A better measure is precision above a priority threshold, and recall on a labell
 - Queue budget: 10,000 operations each day. A full new tag of all items uses about 700.
 - Measured locally in Bun (warm): the largest parse is the WA page at 5.5 ms. It is 17.5 ms on a cold start. Check the real CPU time in Workers Logs after deploy. If it is too high, split the WA page into one message for each table.
 
+## Deadlines, company tags and labels
+
+- Code finds each date in the text of a regulatory item. Jev selects the date when submissions close and the date when the rule starts to apply, as for penalties. A stored date is always a date that the source states.
+- A regulatory item names a company group when a group name is in its title. JJ Richards counts in the body too. An item that names JJ Richards passes the relevance gate and is first in the list.
+- Consultation sites give the close date as free text. The body starts with that text, thus Jev selects the close date as for other items. A date with no year ("9 May") gets its year from the publication date.
+- A check of the past 12 months found about 19 relevant consultations on NSW EPA Your Say and Engage Victoria, and about 12 on the DCCEEW and WA DWER sites. About 15 of the NSW and VIC ones had no news release in the news sources.
+- Consultation sites that were checked and not added: QLD Have Your Say and DETSI (free-text dates, a Cloudflare challenge, about 1 relevant item each year), SA YourSAy (dates only on each project page, about 2 relevant items each year), NHVR (about 2 each year).
+- The DCCEEW and WA DWER sites give the dates as fields. The source writes them in words in the body, thus the same date step reads all consultation sites.
+- `wasteFocus` rates a rule for all vehicles as general. The `fleetRule` question finds the vehicle rules that apply to the trucks and drivers of the company. An item with `fleetRule` at 0.6 or more passes the relevance gate, and its relevance for the priority is the larger of the waste relevance and `fleetRule`.
+- A local run on 2026-09-24 (tag version 4): 33 items in the last 12 months passed the gate because of `fleetRule`, 5 of them High. The 20 NHVR route map notices and the permits for road trains, cranes and livestock carriers stayed hidden. About 9 of the 33 were not useful, for example Port of Brisbane mass permits and road closures.
+- The Deadlines view had 13 dates in the next 90 days, from NSW, VIC and the Commonwealth.
+- The Priority check page shows the useful share for each priority band and item type. Label at least 20 items in each band before you change a weight or a threshold.
+- At 2026-09-24, the live site had 206 relevant items in the last 12 months: 51 High, 67 Medium and 88 Low. Of the 51 High items, 23 were regulator news about enforcement against other companies.
+
+## Sources that were checked and not added
+
+- NSW EPA POEO register of notices and licences: the data is frozen at 28 April 2026 while the EPA moves to a new register. Check again when the new register is live.
+- NHVR enforceable undertakings: the NHVR copyright terms do not permit storage in a retrieval system without written permission.
+- NHVR court outcomes: the defendants are not named.
+- WorkSafe Queensland: a Cloudflare challenge blocks all requests without a browser.
+- NSW Land and Environment Court judgments: the Open Australian Legal Corpus stops at September 2024, and the NSW Caselaw robots.txt blocks bots. The NSW EPA prosecutions register gives the LEC fines.
+- WA DWER licences: HTML only, results stop at 20, and no JJ Richards licences.
+
 ## Known limitations
 
 - A company record can name a person in its text, for example a director in a VIC court summary. The party filter does not remove these names.
@@ -92,18 +130,22 @@ A better measure is precision above a priority threshold, and recall on a labell
 - The QLD register has no description of the conduct. Many QLD records show the conduct as "Not stated".
 - The Search view shows up to 30 candidates from full-text search. A relevant item that has none of the query words is not found.
 - The VIC search endpoints are not documented APIs, and they can change without notice. The schema check fails loudly if they change.
+- The NSW EPA prosecutions call uses a Salesforce class ID that can change when the EPA changes the site. The schema check then fails loudly.
+- WHS summaries (WorkSafe Victoria, SafeWork NSW) can name injured workers. The party filter does not remove these names.
+- The licence sources show changes for JJ Richards only. They do not show changes for competitors.
 
 ## Before deploy
 
 - Create the D1 database `trashboard`, the R2 bucket `trashboard-raw` and the queues `trashboard-ingest` and `trashboard-items`, then put the database ID in `wrangler.jsonc`.
 - Apply the migrations: `npm run db:migrate:remote`.
+- After the deploy, click "Tag and summarise waiting items" on the Sources page. Tag version 4 changes the questions, thus the views are empty until the items have new tags.
 - Set the secrets: `TYPESAFE_API_KEY`, `DASHBOARD_PASSWORD`, `SESSION_SECRET`.
 - Test the SA EPA source from Cloudflare. CloudFront can block Cloudflare egress addresses.
 
 ## Next (v2 and later)
 
-- Case law: NSW Land and Environment Court judgments from the Open Australian Legal Corpus (Hugging Face, `isaacus/open-australian-legal-corpus`). Do not use AustLII, because its terms do not permit bots or AI.
-- NSW EPA penalty notices and prosecutions. The register needs ASP.NET form posts. Search only for the names of JJR and its competitors.
+- Case law text: NSW Land and Environment Court judgments from the Open Australian Legal Corpus (Hugging Face, `isaacus/open-australian-legal-corpus`), as a one-time backfill to September 2024. Do not use AustLII, because its terms do not permit bots or AI.
+- NSW EPA penalty notices, from the new register when it is live.
 - More sources: WA legislation feeds (slow server), QLD and NSW Government Gazettes (PDF), DCCEEW news, NSW Have Your Say, QLD ministerial statements.
 - Email digest. The digest is a query over tagged items and tracked items, thus the send step is the only new part.
 - Council contract expiry map from council meeting minutes and tender portals.

@@ -8,8 +8,9 @@ const PACKAGE = `${API}/package_show?id=enforcement-actions-register`;
 const DATASET_PAGE = 'https://www.data.qld.gov.au/dataset/enforcement-actions-register';
 const PAGE_ROWS = 400;
 
-// QLD environmentally relevant activities 53 to 63 are waste and resource recovery activities.
-const WASTE_ERA = /\bERA\s*(5[3-9]|6[0-3])\b/i;
+// QLD environmentally relevant activities 53 to 62 are waste and resource recovery activities.
+// ERA 63 is sewage treatment, which is not a waste business.
+const WASTE_ERA = /\bERA\s*(5[3-9]|6[0-2])\b/i;
 
 const Package = z.object({
   result: z.object({
