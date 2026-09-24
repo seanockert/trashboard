@@ -250,6 +250,9 @@ const when = (test: boolean, make: () => Clause): Clause[] => (test ? [make()] :
 const period = ({ kind, version, since }: { kind: NewItem['kind']; version: number; since: string }) =>
   clause('kind = ? AND tag_version = ? AND COALESCE(published_at, substr(first_seen_at, 1, 10)) >= ?', kind, version, since);
 
+// Items whose title, body or party has each word. `match` is an FTS5 query, see ftsFilter.
+const textMatch = (match: string | undefined) => when(match !== undefined && match !== '', () => clause('rowid IN (SELECT rowid FROM items_fts WHERE items_fts MATCH ?)', match ?? ''));
+
 const first = (result: D1Result | undefined) => Count.array().parse(result?.results ?? [])[0]?.n ?? 0;
 
 export type RegulatoryQuery = {
@@ -259,6 +262,7 @@ export type RegulatoryQuery = {
   // A company group ID, or "any" for an item that names any known group.
   company: string | undefined;
   flags: FlagKey[];
+  match: string | undefined;
   relevantOnly: boolean;
   limit: number;
   offset: number;
@@ -273,6 +277,7 @@ export const regulatoryPage = (db: D1Database) => async (q: RegulatoryQuery) => 
     ...when(q.company === 'any', () => clause('party_group IS NOT NULL')),
     ...when(q.company !== undefined && q.company !== 'any', () => clause('party_group = ?', q.company ?? '')),
     ...q.flags.map((key) => clause(flagSql(key))),
+    ...textMatch(q.match),
   ]);
   // Items that name JJ Richards come first, thus the user cannot miss them.
   const [page, matched] = await db.batch([
@@ -294,6 +299,7 @@ export type EnforcementQuery = {
   wasteOnly: boolean;
   group: string | undefined;
   offence: string | undefined;
+  match: string | undefined;
   limit: number;
   offset: number;
 };
@@ -322,6 +328,7 @@ export const enforcementPage = (db: D1Database) => async (q: EnforcementQuery) =
     base,
     ...when(q.group !== undefined, () => clause(`COALESCE(party_group, 'other') = ?`, q.group ?? '')),
     ...when(q.offence !== undefined, () => clause(`${OFFENCE_SQL} = ?`, q.offence ?? '')),
+    ...textMatch(q.match),
   ]);
   const [groups, offences, page, matched, penalties] = await db.batch([
     groupCounts(db, base),

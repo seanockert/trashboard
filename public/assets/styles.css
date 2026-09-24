@@ -453,6 +453,119 @@ dialog, .menu .items, .bookmark form {
   }
 }
 
+/* Omni-bar. The input text is transparent. The mirror behind it shows the same text, with the tokens in colour. */
+.omni-box {
+  position: relative;
+
+  input, .omni-mirror {
+    width: 100%;
+    padding: var(--size-half) var(--size-base);
+    border: 1px solid transparent;
+    font: inherit;
+    letter-spacing: normal;
+    white-space: pre;
+  }
+
+  input {
+    position: relative;
+    background: transparent;
+    border-color: var(--color-border);
+    color: transparent;
+    caret-color: var(--color-text);
+  }
+
+  input::placeholder {
+    color: var(--color-muted);
+  }
+
+  input:focus {
+    outline: 2px solid var(--color-brand);
+    outline-offset: -1px;
+  }
+
+  .omni-mirror {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    border-radius: var(--radius);
+    background: var(--color-panel);
+    color: var(--color-text);
+    pointer-events: none;
+  }
+}
+
+.omni .k {
+  color: var(--color-muted);
+}
+
+.omni .v {
+  color: var(--color-brand);
+  font-weight: 600;
+}
+
+.omni .v.bad {
+  color: var(--color-error);
+  text-decoration: underline wavy;
+}
+
+.omni-pop {
+  position: absolute;
+  top: calc(100% + var(--size-half));
+  left: 0;
+  z-index: 10;
+  width: min(26rem, 100%);
+  max-height: min(24rem, 60vh);
+  overflow-y: auto;
+  padding: var(--size-half);
+  background: var(--color-panel);
+  border-radius: var(--radius-large);
+  box-shadow: var(--shadow-float);
+  font-size: var(--font-size-note);
+}
+
+.omni-head {
+  padding: var(--size-half) var(--size-base) var(--size-quarter);
+  font-size: var(--font-size-small);
+  font-weight: 600;
+  color: var(--color-muted);
+}
+
+.omni-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--size-base);
+  padding: var(--size-half) var(--size-base);
+  border-radius: var(--radius);
+  cursor: pointer;
+
+  .note {
+    text-align: right;
+  }
+}
+
+.omni-item:hover, .omni-item.on {
+  background: var(--color-bg);
+}
+
+.omni-item.on {
+  box-shadow: inset 2px 0 0 var(--color-brand);
+}
+
+.omni-toggles {
+  font-size: var(--font-size-note);
+}
+
+.check {
+  cursor: pointer;
+
+  input {
+    accent-color: var(--color-brand);
+    width: 1rem;
+    height: 1rem;
+  }
+}
+
 .login {
   width: min(100%, 17rem);
   align-self: center;

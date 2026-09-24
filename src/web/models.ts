@@ -3,6 +3,7 @@ import { EnforcementAnswers, LINES_OF_BUSINESS, OFFENCES, RegulatoryAnswers, TOP
 import { Jurisdiction, type StoredItem } from '../items';
 import { PARTY_GROUPS } from '../parties';
 import { FLAG_MIN, PRIORITY_HIGH, PRIORITY_MEDIUM, type FlagKey } from '../rank';
+import { formatOmni, omniField, parseOmni } from './omnibar';
 
 export const PAGE_SIZE = 50;
 
@@ -46,35 +47,96 @@ export const OFFENCE_LABELS: Record<string, string> = {
 
 const optional = <T extends z.ZodType>(schema: T) => z.preprocess((value) => (value === '' ? undefined : value), schema.optional());
 const page = optional(z.coerce.number().int().min(1).max(1000)).default(1);
+const omniText = z.string().catch('').transform((text) => text.slice(0, 300));
 
-export const ChangesFilters = z.object({
-  days: optional(z.coerce.number().int().min(1).max(3650)).default(90),
-  jurisdiction: optional(Jurisdiction),
-  lob: optional(z.enum(LINES_OF_BUSINESS)),
-  topic: optional(z.enum(TOPICS)),
-  need: optional(z.enum(['action', 'submissions'])),
-  company: optional(z.enum([...PARTY_GROUPS.map((g) => g.id), 'any'])),
+const JURISDICTION_OPTIONS = Jurisdiction.options.map((j) => ({ token: j, label: j, value: j }));
+const GROUP_OPTIONS = PARTY_GROUPS.map((g) => ({ token: g.id, label: g.label, value: g.id }));
+
+// The short token for each key. The token is what the user types after "part:" or "topic:".
+const LOB_TOKENS: Record<(typeof LINES_OF_BUSINESS)[number], string> = {
+  lobCollection: 'collection',
+  lobRecycling: 'recycling',
+  lobLiquidHazardous: 'hazardous',
+  lobLandfill: 'landfill',
+  lobFleet: 'fleet',
+};
+
+const TOPIC_TOKENS: Record<(typeof TOPICS)[number], string> = {
+  topicLevy: 'levy',
+  topicLicensing: 'licensing',
+  topicPollution: 'pollution',
+  topicContaminants: 'pfas',
+  topicStewardship: 'stewardship',
+  topicPackaging: 'packaging',
+  topicEmissions: 'emissions',
+  topicPlanning: 'planning',
+  topicSafety: 'safety',
+};
+
+export const CHANGES_FIELDS = {
+  days: omniField('period', 'Period', [
+    { token: '7d', label: 'Last 7 days', value: 7 },
+    { token: '30d', label: 'Last 30 days', value: 30 },
+    { token: '90d', label: 'Last 90 days', value: 90 },
+    { token: '12m', label: 'Last 12 months', value: 365 },
+  ]),
+  jurisdiction: omniField('jurisdiction', 'Jurisdiction', JURISDICTION_OPTIONS),
+  lob: omniField('part', 'Part of business', LINES_OF_BUSINESS.map((key) => ({ token: LOB_TOKENS[key], label: LOB_LABELS[key], value: key }))),
+  topic: omniField('topic', 'Topic', TOPICS.map((key) => ({ token: TOPIC_TOKENS[key], label: TOPIC_LABELS[key], value: key }))),
+  company: omniField('company', 'Company named', [...GROUP_OPTIONS, { token: 'any', label: 'Any listed company', value: 'any' }]),
+};
+
+export const ENFORCEMENT_FIELDS = {
+  days: omniField('period', 'Period', [
+    { token: '12m', label: 'Last 12 months', value: 365 },
+    { token: '2y', label: 'Last 2 years', value: 730 },
+    { token: '5y', label: 'Last 5 years', value: 1825 },
+    { token: '10y', label: 'Last 10 years', value: 3650 },
+  ]),
+  jurisdiction: omniField('jurisdiction', 'Jurisdiction', JURISDICTION_OPTIONS),
+  group: omniField('company', 'Company', [...GROUP_OPTIONS, { token: 'other', label: 'Other companies', value: 'other' }]),
+  offence: omniField('conduct', 'Conduct', OFFENCES.map((key) => ({ token: key, label: OFFENCE_LABELS[key] ?? key, value: key }))),
+};
+
+const ChangesParams = z.object({
+  q: omniText.default(''),
+  action: optional(z.literal('1')),
+  submissions: optional(z.literal('1')),
   all: optional(z.literal('1')),
   page,
 });
-export type ChangesFilters = z.infer<typeof ChangesFilters>;
+
+export const parseChangesFilters = (params: Record<string, string>) => {
+  const { q, ...rest } = ChangesParams.parse(params);
+  const omni = parseOmni(CHANGES_FIELDS, q);
+  return { ...omni, picked: { ...omni.picked, days: omni.picked.days ?? 90 }, ...rest };
+};
+export type ChangesFilters = ReturnType<typeof parseChangesFilters>;
+
+// The URL parameters that give the same filters.
+export const changesParams = (f: ChangesFilters) => ({ q: formatOmni(CHANGES_FIELDS, f), action: f.action, submissions: f.submissions, all: f.all, page: f.page > 1 ? f.page : undefined });
 
 export const changesFlags = (f: ChangesFilters): FlagKey[] => [
-  ...(f.lob === undefined ? [] : [f.lob]),
-  ...(f.topic === undefined ? [] : [f.topic]),
-  ...(f.need === 'action' ? ['actionRequired' as const] : []),
-  ...(f.need === 'submissions' ? ['submissionsOpen' as const] : []),
+  ...(f.picked.lob === undefined ? [] : [f.picked.lob]),
+  ...(f.picked.topic === undefined ? [] : [f.picked.topic]),
+  ...(f.action === '1' ? ['actionRequired' as const] : []),
+  ...(f.submissions === '1' ? ['submissionsOpen' as const] : []),
 ];
 
-export const EnforcementFilters = z.object({
-  days: optional(z.coerce.number().int().min(1).max(9000)).default(1825),
-  jurisdiction: optional(Jurisdiction),
-  group: optional(z.enum([...PARTY_GROUPS.map((g) => g.id), 'other'])),
-  offence: optional(z.enum(OFFENCES)),
+const EnforcementParams = z.object({
+  q: omniText.default(''),
   industry: optional(z.enum(['waste', 'all'])).default('waste'),
   page,
 });
-export type EnforcementFilters = z.infer<typeof EnforcementFilters>;
+
+export const parseEnforcementFilters = (params: Record<string, string>) => {
+  const { q, ...rest } = EnforcementParams.parse(params);
+  const omni = parseOmni(ENFORCEMENT_FIELDS, q);
+  return { ...omni, picked: { ...omni.picked, days: omni.picked.days ?? 1825 }, ...rest };
+};
+export type EnforcementFilters = ReturnType<typeof parseEnforcementFilters>;
+
+export const enforcementParams = (f: EnforcementFilters) => ({ q: formatOmni(ENFORCEMENT_FIELDS, f), industry: f.industry === 'all' ? 'all' : undefined, page: f.page > 1 ? f.page : undefined });
 
 // Legislation feeds give only a label and the title, for example "Act: <title>".
 // A body with less than this much text beside the title adds nothing to the card.

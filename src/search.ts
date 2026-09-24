@@ -19,6 +19,16 @@ export const ftsQuery = (text: string) =>
     .map((word) => `"${word}"`)
     .join(' OR ');
 
+// A filter needs each word, thus the terms have no OR. Each term is a prefix, thus "stock" also finds "stockpile".
+export const ftsFilter = (text: string) =>
+  text
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((word) => word.length > 1)
+    .slice(0, WORDS_MAX)
+    .map((word) => `"${word}"*`)
+    .join(' ');
+
 const helpsAnswer = noul(
   {
     question: 'Does `candidate` contain information that answers or directly helps with `query`?',

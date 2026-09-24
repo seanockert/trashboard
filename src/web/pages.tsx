@@ -1,16 +1,18 @@
 import type { Child } from 'hono/jsx';
-import { Jurisdiction, type StoredItem, type Tracking, type TrackStatus } from '../items';
-import { LINES_OF_BUSINESS, OFFENCES, TOPICS } from '../jev/answers';
+import { type StoredItem, type Tracking, type TrackStatus } from '../items';
+import { OFFENCES } from '../jev/answers';
 import { PARTY_GROUPS } from '../parties';
 import type { SearchResult } from '../search';
 import { Layout } from './layout';
 import {
-  LOB_LABELS,
+  CHANGES_FIELDS,
+  changesParams,
+  ENFORCEMENT_FIELDS,
+  enforcementParams,
   OFFENCE_LABELS,
   PAGE_SIZE,
   brisbaneDay,
   snippet,
-  TOPIC_LABELS,
   type ChangeRow,
   type ChangesFilters,
   type EnforcementFilters,
@@ -23,6 +25,7 @@ import {
   type PenaltyBenchmark,
 } from './models';
 import { FLAG_MIN } from '../rank';
+import { formatOmni, omniSpec } from './omnibar';
 
 // Search results below this Jev score show as "Possible match".
 const STRONG_MATCH = 0.7;
@@ -73,21 +76,70 @@ const NoScriptApply = () => (
   </noscript>
 );
 
-const JURISDICTIONS = Jurisdiction.options.map((j) => [j, j] as const);
+// One input for filters and free text. The script in /assets/omnibar.js shows the suggestions.
+// Without the script, the user can type tokens and press Enter.
+// `children` are the checkboxes below the input. A change sends the form at once.
+const OmniBar = ({
+  spec,
+  value,
+  invalid,
+  path,
+  children,
+}: {
+  spec: ReturnType<typeof omniSpec>;
+  value: string;
+  invalid: string[];
+  path: string;
+  children: Child;
+}) => (
+  <form class="omni stack-half" method="get" role="search" data-spec={JSON.stringify(spec)}>
+    <div class="omni-box">
+      <div class="omni-mirror" aria-hidden="true" />
+      <input
+        type="text"
+        id="q"
+        name="q"
+        value={value}
+        placeholder="Filter, or type words to match"
+        aria-label="Filter and search"
+        autocomplete="off"
+        autocapitalize="off"
+        spellcheck={false}
+        role="combobox"
+        aria-autocomplete="list"
+        aria-expanded="false"
+        aria-controls="omni-list"
+      />
+      <div class="omni-pop" id="omni-list" role="listbox" aria-label="Suggestions" hidden />
+    </div>
+    <div class="omni-toggles inline-between inline-wrap">
+      <div class="inline-2x inline-wrap">{children}</div>
+      <a class="note" href={path}>
+        Clear all
+      </a>
+    </div>
+    {invalid.length > 0 && <div class="error note">Not a known filter, thus not used: {invalid.join(', ')}</div>}
+    <noscript>
+      <button type="submit">Apply</button>
+    </noscript>
+    <script src="/assets/omnibar.js" defer />
+  </form>
+);
 
-const CHANGES_PERIODS = [
-  [7, 'Last 7 days'],
-  [30, 'Last 30 days'],
-  [90, 'Last 90 days'],
-  [365, 'Last 12 months'],
-] as const;
+const Check = ({ name, value = '1', checked, text }: { name: string; value?: string; checked: boolean; text: string }) => (
+  <label class="check inline-half">
+    <input type="checkbox" name={name} value={value} checked={checked} onchange="this.form.submit()" /> {text}
+  </label>
+);
 
-const ENFORCEMENT_PERIODS = [
-  [365, 'Last 12 months'],
-  [730, 'Last 2 years'],
-  [1825, 'Last 5 years'],
-  [3650, 'Last 10 years'],
-] as const;
+// A link to the AI search for the free text of the omni-bar.
+const AskAi = ({ text }: { text: string }) =>
+  text === '' ? null : (
+    <>
+      {' '}
+      <a href={`/search?${new URLSearchParams({ q: text })}`}>Ask AI about “{text}”</a>
+    </>
+  );
 
 const date = (iso: string | null) =>
   iso === null ? 'No date' : new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
@@ -195,7 +247,7 @@ const TrackInfo = ({ tracking }: { tracking: Tracking | undefined }) =>
 
 // A query string with the values that are set.
 const query = (params: Record<string, string | number | undefined>) =>
-  `?${new URLSearchParams(Object.entries(params).flatMap(([k, v]) => (v === undefined ? [] : [[k, String(v)]])))}`;
+  `?${new URLSearchParams(Object.entries(params).flatMap(([k, v]) => (v === undefined || v === '' ? [] : [[k, String(v)]])))}`;
 
 // Links to the pages before and after, with the same filters.
 const Pager = ({ filters, matched }: { filters: Record<string, string | number | undefined>; matched: number }) => {
@@ -232,7 +284,6 @@ export const LoginPage = ({ next, error }: { next: string; error: string | null 
 export type LabelMap = ReadonlyMap<string, boolean>;
 
 const GROUP_LABELS: Record<string, string> = Object.fromEntries(PARTY_GROUPS.map((g) => [g.id, g.label]));
-const GROUP_OPTIONS = PARTY_GROUPS.map((g) => [g.id, g.label] as const);
 
 const KIND_LABELS: Record<StoredItem['kind'], string> = { regulatory: 'Regulatory', enforcement: 'Enforcement' };
 
@@ -303,12 +354,18 @@ const LabelForm = ({ item, label, back }: { item: StoredItem; label: boolean | u
   </form>
 );
 
+// The URL of the Changes page with these filters, on page 1.
+const changesHref = (filters: ChangesFilters) => query(changesParams({ ...filters, page: 1 }));
+
 const ChangeCard = ({ row, filters, tracking, label }: { row: ChangeRow; filters: ChangesFilters; tracking: TrackingMap; label: boolean | undefined }) => {
-  const href = (key: 'lob' | 'topic' | 'need' | 'company', value: string) => query({ ...filters, page: undefined, [key]: filters[key] === value ? undefined : value });
+  const { picked } = filters;
+  const toggle = <K extends 'lob' | 'topic' | 'company'>(key: K, value: NonNullable<(typeof picked)[K]>) =>
+    changesHref({ ...filters, picked: { ...picked, [key]: picked[key] === value ? undefined : value } });
   const group = row.item.partyGroup;
+  const companyValue = CHANGES_FIELDS.company.options.find((o) => o.value === group)?.value;
   return (
     <div class="card stack-half" id={anchor(row.item)}>
-      <Bookmark item={row.item} tracking={tracking.get(row.item.id)} back={`/changes${query(filters)}`} />
+      <Bookmark item={row.item} tracking={tracking.get(row.item.id)} back={`/changes${query(changesParams(filters))}`} />
       <div class="meta inline-wrap">
         <Priority row={row} />
         <div>{row.item.jurisdiction}</div>
@@ -318,19 +375,25 @@ const ChangeCard = ({ row, filters, tracking, label }: { row: ChangeRow; filters
       <Title item={row.item} text={row.item.title} />
       <ItemText item={row.item} />
       <div class="tags inline-wrap">
-        {group !== null && <TagLink href={href('company', group)} on={filters.company === group} warn={group === 'jjr'} text={`Names ${GROUP_LABELS[group] ?? group}`} />}
+        {group !== null && companyValue !== undefined && (
+          <TagLink href={toggle('company', companyValue)} on={picked.company === group} warn={group === 'jjr'} text={`Names ${GROUP_LABELS[group] ?? group}`} />
+        )}
         <DateTags item={row.item} />
-        {row.answers.actionRequired.noul >= FLAG_MIN && <TagLink href={href('need', 'action')} on={filters.need === 'action'} warn text="Action may be needed" />}
-        {row.answers.submissionsOpen.noul >= FLAG_MIN && <TagLink href={href('need', 'submissions')} on={filters.need === 'submissions'} warn text="Submissions invited" />}
+        {row.answers.actionRequired.noul >= FLAG_MIN && (
+          <TagLink href={changesHref({ ...filters, action: filters.action === '1' ? undefined : '1' })} on={filters.action === '1'} warn text="Action may be needed" />
+        )}
+        {row.answers.submissionsOpen.noul >= FLAG_MIN && (
+          <TagLink href={changesHref({ ...filters, submissions: filters.submissions === '1' ? undefined : '1' })} on={filters.submissions === '1'} warn text="Submissions invited" />
+        )}
         {row.lines.map((line) => (
-          <TagLink href={href('lob', line.key)} on={filters.lob === line.key} text={line.label} />
+          <TagLink href={toggle('lob', line.key)} on={picked.lob === line.key} text={line.label} />
         ))}
         {row.topics.map((topic) => (
-          <TagLink href={href('topic', topic.key)} on={filters.topic === topic.key} text={topic.label} />
+          <TagLink href={toggle('topic', topic.key)} on={picked.topic === topic.key} text={topic.label} />
         ))}
       </div>
       <TrackInfo tracking={tracking.get(row.item.id)} />
-      <LabelForm item={row.item} label={label} back={`/changes${query(filters)}`} />
+      <LabelForm item={row.item} label={label} back={`/changes${query(changesParams(filters))}`} />
     </div>
   );
 };
@@ -348,32 +411,28 @@ export const ChangesPage = ({
   tracking: TrackingMap;
   labels: LabelMap;
 }) => {
-  const toggleAll = query({ ...filters, page: undefined, all: filters.all === '1' ? undefined : '1' });
+  const toggleAll = changesHref({ ...filters, all: filters.all === '1' ? undefined : '1' });
   return (
-    <Layout title="Regulatory changes" path="/changes">
+    <Layout title="Regulatory changes" path="/changes" search={false}>
       <h1>Regulatory changes</h1>
       <p class="sub">
         New laws, consultations and regulator news that can affect the business. Items that name JJ Richards are first, then the most important. <a href="/about#priority">How priority works</a>
       </p>
-      <form class="filters inline-wrap" method="get">
-        <Select name="days" label="Period" value={filters.days} options={CHANGES_PERIODS} blank={null} />
-        <Select name="jurisdiction" label="Jurisdiction" value={filters.jurisdiction} options={JURISDICTIONS} />
-        <Select name="lob" label="Part of business" value={filters.lob} options={LINES_OF_BUSINESS.map((key) => [key, LOB_LABELS[key]] as const)} />
-        <Select name="topic" label="Topic" value={filters.topic} options={TOPICS.map((key) => [key, TOPIC_LABELS[key]] as const)} />
-        <Select
-          name="need"
-          label="Show"
-          value={filters.need}
-          options={[['action', 'Action may be needed'] as const, ['submissions', 'Submissions invited'] as const]}
-          blank="All items"
-        />
-        <Select name="company" label="Company" value={filters.company} options={[...GROUP_OPTIONS, ['any', 'Any listed company'] as const]} />
+      <OmniBar spec={omniSpec(CHANGES_FIELDS)} value={formatOmni(CHANGES_FIELDS, filters)} invalid={filters.invalid} path="/changes">
+        <Check name="action" checked={filters.action === '1'} text="Action may be needed" />
+        <Check name="submissions" checked={filters.submissions === '1'} text="Submissions invited" />
         {filters.all === '1' && <input type="hidden" name="all" value="1" />}
-        <NoScriptApply />
-      </form>
+      </OmniBar>
       <p class="count">{plural(matched, 'item')}</p>
-      {rows.length === 0 ? <div class="empty">No items match these filters.</div> : rows.map((row) => <ChangeCard row={row} filters={filters} tracking={tracking} label={labels.get(row.item.id)} />)}
-      <Pager filters={filters} matched={matched} />
+      {rows.length === 0 ? (
+        <div class="empty">
+          No items match these filters.
+          <AskAi text={filters.text} />
+        </div>
+      ) : (
+        rows.map((row) => <ChangeCard row={row} filters={filters} tracking={tracking} label={labels.get(row.item.id)} />)
+      )}
+      <Pager filters={changesParams(filters)} matched={matched} />
       <p class="note">
         <a href={toggleAll}>{filters.all === '1' ? 'Hide items that are probably not relevant' : 'Also show items that are probably not relevant'}</a>
       </p>
@@ -381,9 +440,14 @@ export const ChangesPage = ({
   );
 };
 
+// The URL of the Enforcement page with these filters, on page 1.
+const enforcementHref = (filters: EnforcementFilters) => query(enforcementParams({ ...filters, page: 1 }));
+
+const withOffence = (filters: EnforcementFilters, offence: string | undefined) => ({ ...filters, picked: { ...filters.picked, offence: OFFENCES.find((o) => o === offence) } });
+
 const EnforcementCard = ({ row, filters, tracking }: { row: EnforcementRow; filters: EnforcementFilters; tracking: TrackingMap }) => (
   <div class="card stack-half" id={anchor(row.item)}>
-    <Bookmark item={row.item} tracking={tracking.get(row.item.id)} back={`/enforcement${query(filters)}`} />
+    <Bookmark item={row.item} tracking={tracking.get(row.item.id)} back={`/enforcement${query(enforcementParams(filters))}`} />
     <div class="meta inline-wrap">
       <div>{row.item.jurisdiction}</div>
       <div>{date(row.item.publishedAt)}</div>
@@ -394,8 +458,8 @@ const EnforcementCard = ({ row, filters, tracking }: { row: EnforcementRow; filt
     <ItemText item={row.item} />
     <div class="tags inline-wrap">
       <TagLink
-        href={query({ ...filters, page: undefined, offence: filters.offence === row.answers.offence.choice ? undefined : row.answers.offence.choice })}
-        on={filters.offence === row.answers.offence.choice}
+        href={enforcementHref(withOffence(filters, filters.picked.offence === row.answers.offence.choice ? undefined : row.answers.offence.choice))}
+        on={filters.picked.offence === row.answers.offence.choice}
         text={OFFENCE_LABELS[row.answers.offence.choice] ?? row.answers.offence.choice}
       />
       {row.answers.severity.score >= 2 && <div class="tag warn">Harm or serious conduct</div>}
@@ -435,7 +499,7 @@ const PenaltyTable = ({ rows, filters }: { rows: PenaltyBenchmark[]; filters: En
             {rows.map((row) => (
               <tr>
                 <td>
-                  <a href={query({ ...filters, page: undefined, offence: row.id })}>{row.label}</a>
+                  <a href={enforcementHref(withOffence(filters, row.id))}>{row.label}</a>
                 </td>
                 <td class="num">{row.count}</td>
                 <td class="num">{row.count >= BENCHMARK_MIN ? aud(row.median) : '-'}</td>
@@ -451,44 +515,40 @@ const PenaltyTable = ({ rows, filters }: { rows: PenaltyBenchmark[]; filters: En
     </>
   );
 
+// The conduct suggestions show the count of records for each conduct in the period.
+const enforcementSpec = (offences: EnforcementModel['offences']) =>
+  omniSpec(ENFORCEMENT_FIELDS).map((field) =>
+    field.key === 'conduct' ? { ...field, options: field.options.map((o) => ({ ...o, label: `${o.label} (${offences.find((c) => c.id === o.token)?.count ?? 0})` })) } : field,
+  );
+
 export const EnforcementPage = ({ model, filters, tracking }: { model: EnforcementModel; filters: EnforcementFilters; tracking: TrackingMap }) => (
-  <Layout title="Enforcement" path="/enforcement">
+  <Layout title="Enforcement" path="/enforcement" search={false}>
     <h1>Enforcement</h1>
     <p class="sub">Fines, orders and prosecutions against companies, from the public registers.</p>
-    <form class="filters inline-wrap" method="get">
-      <Select name="days" label="Period" value={filters.days} options={ENFORCEMENT_PERIODS} blank={null} />
-      <Select name="jurisdiction" label="Jurisdiction" value={filters.jurisdiction} options={JURISDICTIONS} />
-      <Select
-        name="group"
-        label="Company"
-        value={filters.group}
-        options={[...GROUP_OPTIONS, ['other', 'Other companies'] as const]}
-      />
-      <Select
-        name="offence"
-        label="Conduct"
-        value={filters.offence}
-        options={OFFENCES.map((k) => [k, `${OFFENCE_LABELS[k] ?? k} (${model.offences.find((o) => o.id === k)?.count ?? 0})`] as const)}
-      />
-      <Select
-        name="industry"
-        label="Industry"
-        value={filters.industry}
-        options={[['waste', 'Waste operators only'] as const, ['all', 'All companies'] as const]}
-        blank={null}
-      />
-      <NoScriptApply />
-    </form>
+    <OmniBar spec={enforcementSpec(model.offences)} value={formatOmni(ENFORCEMENT_FIELDS, filters)} invalid={filters.invalid} path="/enforcement">
+      <Check name="industry" value="all" checked={filters.industry === 'all'} text="Include companies outside waste" />
+    </OmniBar>
 
     <GroupTable
       rows={model.groups}
-      name={(g) => <a href={query({ ...filters, page: undefined, offence: undefined, group: g.id })}>{g.id === 'other' && filters.industry === 'all' ? 'Other companies' : g.label}</a>}
+      name={(g) => (
+        <a href={enforcementHref({ ...filters, picked: { ...filters.picked, offence: undefined, group: ENFORCEMENT_FIELDS.group.options.find((o) => o.value === g.id)?.value } })}>
+          {g.id === 'other' && filters.industry === 'all' ? 'Other companies' : g.label}
+        </a>
+      )}
     />
     <p class="note">Counts depend on which registers publish data. Compare groups in one jurisdiction. Records that name a person are not stored.</p>
     <PenaltyTable rows={model.penalties} filters={filters} />
     <p class="count">{plural(model.matched, 'record')}</p>
-    {model.list.length === 0 ? <div class="empty">No records match these filters.</div> : model.list.map((row) => <EnforcementCard row={row} filters={filters} tracking={tracking} />)}
-    <Pager filters={filters} matched={model.matched} />
+    {model.list.length === 0 ? (
+      <div class="empty">
+        No records match these filters.
+        <AskAi text={filters.text} />
+      </div>
+    ) : (
+      model.list.map((row) => <EnforcementCard row={row} filters={filters} tracking={tracking} />)
+    )}
+    <Pager filters={enforcementParams(filters)} matched={model.matched} />
   </Layout>
 );
 

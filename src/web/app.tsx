@@ -20,19 +20,19 @@ import { readSecrets } from '../env';
 import { TAG_VERSION } from '../jev/questions';
 import { makeClient } from '../jev/tag';
 import { retagStale, scheduleAll, summariseStale } from '../pipeline';
-import { search } from '../search';
+import { ftsFilter, search } from '../search';
 import { SOURCES } from '../sources';
 import { checkPassword, endSession, requireSession, safeNext, startSession } from './auth';
 import {
   bandStats,
   brisbaneDay,
-  ChangesFilters,
   changesFlags,
   dateEntries,
-  EnforcementFilters,
   groupTable,
   offenceChips,
   PAGE_SIZE,
+  parseChangesFilters,
+  parseEnforcementFilters,
   penaltyBenchmarks,
   Quarter,
   quarterOf,
@@ -81,13 +81,14 @@ app.use('*', requireSession);
 app.get('/', (c) => c.redirect('/changes'));
 
 app.get('/changes', async (c) => {
-  const filters = ChangesFilters.parse(c.req.query());
+  const filters = parseChangesFilters(c.req.query());
   const result = await regulatoryPage(c.env.DB)({
-    since: sinceDate(filters.days, new Date()),
+    since: sinceDate(filters.picked.days, new Date()),
     version: TAG_VERSION,
-    jurisdiction: filters.jurisdiction,
-    company: filters.company,
+    jurisdiction: filters.picked.jurisdiction,
+    company: filters.picked.company,
     flags: changesFlags(filters),
+    match: ftsFilter(filters.text),
     relevantOnly: filters.all !== '1',
     limit: PAGE_SIZE,
     offset: (filters.page - 1) * PAGE_SIZE,
@@ -98,14 +99,15 @@ app.get('/changes', async (c) => {
 });
 
 app.get('/enforcement', async (c) => {
-  const filters = EnforcementFilters.parse(c.req.query());
+  const filters = parseEnforcementFilters(c.req.query());
   const result = await enforcementPage(c.env.DB)({
-    since: sinceDate(filters.days, new Date()),
+    since: sinceDate(filters.picked.days, new Date()),
     version: TAG_VERSION,
-    jurisdiction: filters.jurisdiction,
+    jurisdiction: filters.picked.jurisdiction,
     wasteOnly: filters.industry === 'waste',
-    group: filters.group,
-    offence: filters.offence,
+    group: filters.picked.group,
+    offence: filters.picked.offence,
+    match: ftsFilter(filters.text),
     limit: PAGE_SIZE,
     offset: (filters.page - 1) * PAGE_SIZE,
   });

@@ -49,7 +49,8 @@ const Intro = () => (
   </dialog>
 );
 
-export const Layout = ({ title, path, query = '', children }: { title: string; path: string | null; query?: string; children: Child }) => (
+// `search` is false on a page that has its own omni-bar, thus the page shows one search input only.
+export const Layout = ({ title, path, query = '', search = true, children }: { title: string; path: string | null; query?: string; search?: boolean; children: Child }) => (
   <html lang="en-AU">
     <head>
       <meta charset="utf-8" />
@@ -68,9 +69,11 @@ export const Layout = ({ title, path, query = '', children }: { title: string; p
               {link.label}
             </a>
           ))}
-          <form class="search" method="get" action="/search" role="search">
-            <input type="search" id="q" name="q" value={query} placeholder="Search or ask a question" aria-label="Search" />
-          </form>
+          {search && (
+            <form class="search" method="get" action="/search" role="search">
+              <input type="search" id="q" name="q" value={query} placeholder="Search or ask a question" aria-label="Search" />
+            </form>
+          )}
           <details class="menu">
             <summary aria-label="Settings" title="Settings">
               <CogIcon />
