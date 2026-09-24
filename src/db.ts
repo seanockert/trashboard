@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import { Jurisdiction, TrackStatus, type NewItem, type StoredItem, type Tracking } from './items';
+import { Jurisdiction, TriageStatus, type NewItem, type StoredItem, type Triage } from './items';
 import { groupOf, PARTIES_VERSION } from './parties';
-import { flagSql, IS_RELEVANT_SQL, IS_SERIOUS_SQL, IS_WASTE_OPERATOR_SQL, OFFENCE_SQL, PRIORITY_BAND_SQL, PRIORITY_HIGH, PRIORITY_SQL, type FlagKey } from './rank';
+import { flagSql, IN_INBOX_SQL, IS_RELEVANT_SQL, IS_SERIOUS_SQL, IS_WASTE_OPERATOR_SQL, ITEM_PRIORITY_SQL, PRIORITY_HIGH, PRIORITY_SQL, type FlagKey } from './rank';
 import { NEEDS_SUMMARY_SQL, Summary } from './summary';
 
 const sha256 = async (text: string) => {
@@ -237,6 +237,29 @@ export const untaggedIds = (db: D1Database) => async ({ version, limit, seenBefo
     )
     .map((row) => row.id);
 
+// The items of `ids` that have no current tags. An item sent to the queue two times gets tags one time only.
+export const untaggedAmong = (db: D1Database) => async ({ version, ids }: { version: number; ids: string[] }) =>
+  ids.length === 0
+    ? []
+    : z
+        .array(z.object({ id: z.string() }))
+        .parse(
+          (
+            await db
+              .prepare(`SELECT id FROM items WHERE ${UNTAGGED_SQL} AND id IN (${ids.map((_, i) => `?${i + 2}`).join(', ')})`)
+              .bind(version, ...ids)
+              .all()
+          ).results,
+        )
+        .map((row) => row.id);
+
+// Sources with at least one run that did not fail.
+export const sourcesRunBefore = (db: D1Database) => async () =>
+  z
+    .array(z.object({ source_id: z.string() }))
+    .parse((await db.prepare(`SELECT DISTINCT source_id FROM source_runs WHERE status IN ('ok', 'unchanged')`).all()).results)
+    .map((row) => row.source_id);
+
 const Count = z.object({ n: z.number() });
 
 // A condition with its own values for the "?" marks in it, in order.
@@ -245,146 +268,140 @@ const clause = (sql: string, ...params: (string | number)[]): Clause => ({ sql, 
 const whereOf = (clauses: Clause[]) => ({ sql: clauses.map((c) => c.sql).join(' AND '), params: clauses.flatMap((c) => c.params) });
 const when = (test: boolean, make: () => Clause): Clause[] => (test ? [make()] : []);
 
-// Items in the period whose answers match the current questions. Older
-// answers do not have the same meaning, thus they wait for new tags.
-const period = ({ kind, version, since }: { kind: NewItem['kind']; version: number; since: string }) =>
-  clause('kind = ? AND tag_version = ? AND COALESCE(published_at, substr(first_seen_at, 1, 10)) >= ?', kind, version, since);
+const DAY_SQL = 'COALESCE(published_at, substr(first_seen_at, 1, 10))';
 
-// Items whose title, body or party has each word. `match` is an FTS5 query, see ftsFilter.
-const textMatch = (match: string | undefined) => when(match !== undefined && match !== '', () => clause('rowid IN (SELECT rowid FROM items_fts WHERE items_fts MATCH ?)', match ?? ''));
+export type Period = { from: string; to: string };
 
-const first = (result: D1Result | undefined) => Count.array().parse(result?.results ?? [])[0]?.n ?? 0;
-
-export type RegulatoryQuery = {
-  since: string;
+// The filters of the omni-bar. `topic` applies to regulatory items only.
+// `type` "enforcement" gives enforcement records and regulator news about enforcement.
+export type Scope = {
   version: number;
+  period: Period | undefined;
   jurisdiction: string | undefined;
   // A company group ID, or "any" for an item that names any known group.
   company: string | undefined;
-  flags: FlagKey[];
+  topic: FlagKey | undefined;
+  type: string | undefined;
+  // An FTS5 query, see ftsFilter.
   match: string | undefined;
-  relevantOnly: boolean;
-  limit: number;
-  offset: number;
 };
 
-export const regulatoryPage = (db: D1Database) => async (q: RegulatoryQuery) => {
-  const base = period({ kind: 'regulatory', version: q.version, since: q.since });
-  const filters = whereOf([
-    base,
-    ...when(q.relevantOnly, () => clause(IS_RELEVANT_SQL)),
-    ...when(q.jurisdiction !== undefined, () => clause('jurisdiction = ?', q.jurisdiction ?? '')),
-    ...when(q.company === 'any', () => clause('party_group IS NOT NULL')),
-    ...when(q.company !== undefined && q.company !== 'any', () => clause('party_group = ?', q.company ?? '')),
-    ...q.flags.map((key) => clause(flagSql(key))),
-    ...textMatch(q.match),
-  ]);
-  // Items that name JJ Richards come first, thus the user cannot miss them.
-  const [page, matched] = await db.batch([
-    db
-      .prepare(`SELECT ${ITEM_COLUMNS}, ${PRIORITY_SQL} AS priority FROM items WHERE ${filters.sql} ORDER BY party_group IS 'jjr' DESC, priority DESC LIMIT ? OFFSET ?`)
-      .bind(...filters.params, q.limit, q.offset),
-    db.prepare(`SELECT COUNT(*) AS n FROM items WHERE ${filters.sql}`).bind(...filters.params),
-  ]);
-  return {
-    rows: parseRanked(page ?? { results: [] }),
-    matched: first(matched),
-  };
+const ITEM_TYPE_SQL = `json_extract(answers, '$.itemType.choice')`;
+
+// Items whose answers match the current questions. Older answers do not
+// have the same meaning, thus they wait for new tags.
+const scopeClauses = (s: Scope): Clause[] => [
+  clause('tag_version = ?', s.version),
+  ...when(s.period !== undefined, () => clause(`${DAY_SQL} BETWEEN ? AND ?`, s.period?.from ?? '', s.period?.to ?? '')),
+  ...when(s.jurisdiction !== undefined, () => clause('jurisdiction = ?', s.jurisdiction ?? '')),
+  ...when(s.company === 'any', () => clause('party_group IS NOT NULL')),
+  ...when(s.company !== undefined && s.company !== 'any', () => clause('party_group = ?', s.company ?? '')),
+  ...when(s.topic !== undefined, () => clause(`kind = 'regulatory' AND ${flagSql(s.topic ?? 'actionRequired')}`)),
+  ...when(s.type === 'enforcement', () => clause(`(kind = 'enforcement' OR ${ITEM_TYPE_SQL} = 'enforcement')`)),
+  ...when(s.type !== undefined && s.type !== 'enforcement', () => clause(`kind = 'regulatory' AND ${ITEM_TYPE_SQL} = ?`, s.type ?? '')),
+  // Items whose title, body or party has each word.
+  ...when(s.match !== undefined && s.match !== '', () => clause('items.rowid IN (SELECT rowid FROM items_fts WHERE items_fts MATCH ?)', s.match ?? '')),
+];
+
+const first = (result: D1Result | undefined) => Count.array().parse(result?.results ?? [])[0]?.n ?? 0;
+
+export type Tab = 'new' | 'acting' | 'done';
+
+const TAB_SQL: Record<Tab, string> = {
+  new: 'triage.status IS NULL',
+  acting: `triage.status = 'acting'`,
+  done: `triage.status IN ('done', 'dismissed')`,
 };
 
-export type EnforcementQuery = {
-  since: string;
-  version: number;
-  jurisdiction: string | undefined;
-  wasteOnly: boolean;
-  group: string | undefined;
-  offence: string | undefined;
-  match: string | undefined;
-  limit: number;
-  offset: number;
+const TAB_OF_SQL = `(CASE WHEN triage.status IS NULL THEN 'new' WHEN triage.status = 'acting' THEN 'acting' ELSE 'done' END)`;
+
+const INBOX_FROM = 'items LEFT JOIN triage ON triage.item_id = items.id';
+
+const INBOX_COLUMNS = `${ITEM_COLUMNS}, ${ITEM_PRIORITY_SQL} AS priority, triage.status AS status, triage.note AS note`;
+
+// Items that name JJ Richards come first, thus the user cannot miss them.
+const INBOX_ORDER = `party_group IS 'jjr' DESC, priority DESC`;
+
+const TriageRow = z.object({ status: TriageStatus.nullable(), note: z.string().nullable() });
+
+// Rows that select INBOX_COLUMNS.
+const parseInbox = (result: { results: unknown[] }) => {
+  const triage = TriageRow.array().parse(result.results);
+  return parseRanked(result).map((row, i) => {
+    const t = triage[i];
+    return { ...row, triage: t?.status == null ? null : { status: t.status, note: t.note ?? '' } };
+  });
 };
+export type InboxRow = ReturnType<typeof parseInbox>[number];
 
-// Enforcement counts for each company group. Records with no known group count as "other".
-const groupCounts = (db: D1Database, where: { sql: string; params: unknown[] }) =>
-  db
-    .prepare(
-      `SELECT COALESCE(party_group, 'other') AS grp, COUNT(*) AS n, SUM(penalty_aud) AS penalty, SUM(${IS_SERIOUS_SQL}) AS serious
-       FROM items WHERE ${where.sql} GROUP BY grp`,
-    )
-    .bind(...where.params);
+// `period` applies to all tabs when the user sets it. `defaultPeriod` applies to new items only,
+// thus an item that the user acts on stays in the Acting tab after the period.
+export type InboxQuery = { scope: Scope; defaultPeriod: Period; tab: Tab; limit: number; offset: number };
 
-const GroupRow = z.object({ grp: z.string(), n: z.number(), penalty: z.number().nullable(), serious: z.number() });
-const PenaltyRow = z.object({ offence: z.string().nullable(), penalty: z.number() });
-const OffenceRow = z.object({ offence: z.string().nullable(), n: z.number() });
-
-export const enforcementPage = (db: D1Database) => async (q: EnforcementQuery) => {
-  // The comparison table and the conduct counts use the base filters only.
+export const inboxPage = (db: D1Database) => async (q: InboxQuery) => {
   const base = whereOf([
-    period({ kind: 'enforcement', version: q.version, since: q.since }),
-    ...when(q.wasteOnly, () => clause(IS_WASTE_OPERATOR_SQL)),
-    ...when(q.jurisdiction !== undefined, () => clause('jurisdiction = ?', q.jurisdiction ?? '')),
+    ...scopeClauses(q.scope),
+    clause(IN_INBOX_SQL),
+    ...when(q.scope.period === undefined, () => clause(`(triage.status IS NOT NULL OR ${DAY_SQL} BETWEEN ? AND ?)`, q.defaultPeriod.from, q.defaultPeriod.to)),
   ]);
-  const listed = whereOf([
-    base,
-    ...when(q.group !== undefined, () => clause(`COALESCE(party_group, 'other') = ?`, q.group ?? '')),
-    ...when(q.offence !== undefined, () => clause(`${OFFENCE_SQL} = ?`, q.offence ?? '')),
-    ...textMatch(q.match),
+  const listed = whereOf([base, clause(TAB_SQL[q.tab])]);
+  const order = q.tab === 'done' ? 'triage.updated_at DESC' : INBOX_ORDER;
+  const [page, counts] = await db.batch([
+    db.prepare(`SELECT ${INBOX_COLUMNS} FROM ${INBOX_FROM} WHERE ${listed.sql} ORDER BY ${order} LIMIT ? OFFSET ?`).bind(...listed.params, q.limit, q.offset),
+    db.prepare(`SELECT ${TAB_OF_SQL} AS tab, COUNT(*) AS n FROM ${INBOX_FROM} WHERE ${base.sql} GROUP BY tab`).bind(...base.params),
   ]);
-  const [groups, offences, page, matched, penalties] = await db.batch([
-    groupCounts(db, base),
-    db.prepare(`SELECT ${OFFENCE_SQL} AS offence, COUNT(*) AS n FROM items WHERE ${base.sql} GROUP BY offence`).bind(...base.params),
-    db.prepare(`SELECT ${ITEM_COLUMNS} FROM items WHERE ${listed.sql} ORDER BY published_at DESC LIMIT ? OFFSET ?`).bind(...listed.params, q.limit, q.offset),
-    db.prepare(`SELECT COUNT(*) AS n FROM items WHERE ${listed.sql}`).bind(...listed.params),
-    // Two small columns for each record with a known penalty. The Worker finds the median.
-    db.prepare(`SELECT ${OFFENCE_SQL} AS offence, penalty_aud AS penalty FROM items WHERE ${base.sql} AND penalty_aud IS NOT NULL`).bind(...base.params),
-  ]);
+  const tabs = z.array(z.object({ tab: z.enum(['new', 'acting', 'done']), n: z.number() })).parse(counts?.results ?? []);
   return {
-    groups: GroupRow.array().parse(groups?.results ?? []),
-    offences: OffenceRow.array().parse(offences?.results ?? []),
-    penalties: PenaltyRow.array().parse(penalties?.results ?? []),
-    rows: parseRows(page ?? { results: [] }),
-    matched: first(matched),
+    rows: parseInbox(page ?? { results: [] }),
+    counts: { new: 0, acting: 0, done: 0, ...Object.fromEntries(tabs.map((t) => [t.tab, t.n])) } as Record<Tab, number>,
   };
+};
+
+// Inbox items with a submission close date or a start date in `dates`, soonest first.
+// The items are new or in progress. `actingOnly` gives only the items in progress.
+export const dueItems = (db: D1Database) => async ({ scope, dates, actingOnly = false }: { scope: Scope; dates: Period; actingOnly?: boolean }) => {
+  const where = whereOf([
+    ...scopeClauses({ ...scope, period: undefined }),
+    clause(IN_INBOX_SQL),
+    clause(actingOnly ? `triage.status = 'acting'` : `(triage.status IS NULL OR triage.status = 'acting')`),
+    clause('((closes_on BETWEEN ? AND ?) OR (starts_on BETWEEN ? AND ?))', dates.from, dates.to, dates.from, dates.to),
+  ]);
+  const result = await db
+    .prepare(`SELECT ${INBOX_COLUMNS} FROM ${INBOX_FROM} WHERE ${where.sql} ORDER BY MIN(COALESCE(closes_on, '9'), COALESCE(starts_on, '9')), priority DESC LIMIT 50`)
+    .bind(...where.params)
+    .all();
+  return parseInbox(result);
 };
 
 const prefixed = ITEM_COLUMNS.split(', ').map((c) => `items.${c}`).join(', ');
 
-const TrackingRow = z.object({ item_id: z.string(), status: TrackStatus, note: z.string() });
-
-// The tracking of the items on one page.
-export const trackingFor = (db: D1Database) => async (ids: string[]): Promise<Map<string, Tracking>> => {
+// The triage of the items on one page.
+export const triageFor = (db: D1Database) => async (ids: string[]): Promise<Map<string, Triage>> => {
   if (ids.length === 0) return new Map();
   const result = await db
-    .prepare(`SELECT item_id, status, note FROM tracked WHERE item_id IN (${ids.map((_, i) => `?${i + 1}`).join(', ')})`)
+    .prepare(`SELECT item_id, status, note FROM triage WHERE item_id IN (${ids.map((_, i) => `?${i + 1}`).join(', ')})`)
     .bind(...ids)
     .all();
-  return new Map(z.array(TrackingRow).parse(result.results).map((row) => [row.item_id, { status: row.status, note: row.note }]));
+  return new Map(
+    z
+      .array(z.object({ item_id: z.string(), status: TriageStatus, note: z.string() }))
+      .parse(result.results)
+      .map((row) => [row.item_id, { status: row.status, note: row.note }]),
+  );
 };
 
-// All tracked items. "Acting" first, then the most recent change.
-export const trackedItems = (db: D1Database) => async () => {
-  const result = await db
-    .prepare(`SELECT ${prefixed}, tracked.status, tracked.note FROM tracked JOIN items ON items.id = tracked.item_id ORDER BY tracked.status = 'acting' DESC, tracked.updated_at DESC`)
-    .all();
-  const tracking = z.array(z.object({ status: TrackStatus, note: z.string() })).parse(result.results);
-  return parseRows(result).flatMap((item, i) => {
-    const t = tracking[i];
-    return t === undefined ? [] : [{ item, tracking: { status: t.status, note: t.note } }];
-  });
-};
-
-// A null status stops the tracking of the item.
-export const saveTracking =
+// A null status makes the item new again. A null note keeps the stored note.
+export const saveTriage =
   (db: D1Database) =>
-  async ({ itemId: id, status, note, now }: { itemId: string; status: TrackStatus | null; note: string; now: Date }) => {
+  async ({ itemId: id, status, note, now }: { itemId: string; status: TriageStatus | null; note: string | null; now: Date }) => {
     if (status === null) {
-      await db.prepare('DELETE FROM tracked WHERE item_id = ?1').bind(id).run();
+      await db.prepare('DELETE FROM triage WHERE item_id = ?1').bind(id).run();
       return;
     }
     await db
       .prepare(
-        `INSERT INTO tracked (item_id, status, note, updated_at) VALUES (?1, ?2, ?3, ?4)
-         ON CONFLICT (item_id) DO UPDATE SET status = excluded.status, note = excluded.note, updated_at = excluded.updated_at`,
+        `INSERT INTO triage (item_id, status, note, updated_at) VALUES (?1, ?2, COALESCE(?3, ''), ?4)
+         ON CONFLICT (item_id) DO UPDATE SET status = excluded.status, note = COALESCE(?3, triage.note), updated_at = excluded.updated_at`,
       )
       .bind(id, status, note, now.toISOString())
       .run();
@@ -491,98 +508,40 @@ export const deleteParties =
     return remove.length;
   };
 
-// A null `useful` removes the label.
-export const saveLabel =
-  (db: D1Database) =>
-  async ({ itemId: id, useful, now }: { itemId: string; useful: boolean | null; now: Date }) => {
-    if (useful === null) {
-      await db.prepare('DELETE FROM labels WHERE item_id = ?1').bind(id).run();
-      return;
-    }
-    await db
-      .prepare(
-        `INSERT INTO labels (item_id, useful, updated_at) VALUES (?1, ?2, ?3)
-         ON CONFLICT (item_id) DO UPDATE SET useful = excluded.useful, updated_at = excluded.updated_at`,
-      )
-      .bind(id, useful ? 1 : 0, now.toISOString())
-      .run();
-  };
-
-// The labels of the items on one page.
-export const labelsFor = (db: D1Database) => async (ids: string[]): Promise<Map<string, boolean>> => {
-  if (ids.length === 0) return new Map();
-  const result = await db
-    .prepare(`SELECT item_id, useful FROM labels WHERE item_id IN (${ids.map((_, i) => `?${i + 1}`).join(', ')})`)
-    .bind(...ids)
-    .all();
-  return new Map(z.array(z.object({ item_id: z.string(), useful: z.number() })).parse(result.results).map((row) => [row.item_id, row.useful === 1]));
-};
-
-const LabelStatRow = z.object({ band: z.enum(['high', 'medium', 'low', 'hidden']), type: z.string().nullable(), n: z.number(), useful: z.number() });
-
-// Labelled regulatory items with current tags, by priority band and item type.
-export const labelStats = (db: D1Database) => async (version: number) =>
-  LabelStatRow.array().parse(
-    (
-      await db
-        .prepare(
-          `SELECT ${PRIORITY_BAND_SQL} AS band, json_extract(answers, '$.itemType.choice') AS type, COUNT(*) AS n, SUM(labels.useful) AS useful
-           FROM labels JOIN items ON items.id = labels.item_id
-           WHERE kind = 'regulatory' AND tag_version = ?1
-           GROUP BY band, type`,
-        )
-        .bind(version)
-        .all()
-    ).results,
-  );
-
-// Relevant regulatory items with a submission close date or a start date from `from` to `to`.
-export const upcomingDates = (db: D1Database) => async ({ version, from, to }: { version: number; from: string; to: string }) => {
-  const result = await db
-    .prepare(
-      `SELECT ${ITEM_COLUMNS}, ${PRIORITY_SQL} AS priority FROM items
-       WHERE kind = 'regulatory' AND tag_version = ?1 AND ${IS_RELEVANT_SQL}
-         AND ((closes_on >= ?2 AND closes_on <= ?3) OR (starts_on >= ?2 AND starts_on <= ?3))
-       ORDER BY priority DESC LIMIT 500`,
-    )
-    .bind(version, from, to)
-    .all();
-  return parseRanked(result);
-};
-
-export type ReportQuery = { version: number; from: string; to: string };
-
-const between = ({ kind, version, from, to }: ReportQuery & { kind: NewItem['kind'] }) =>
-  clause('kind = ? AND tag_version = ? AND COALESCE(published_at, substr(first_seen_at, 1, 10)) BETWEEN ? AND ?', kind, version, from, to);
+const GroupRow = z.object({ grp: z.string(), n: z.number(), penalty: z.number().nullable(), serious: z.number() });
 
 const ReportCounts = z.object({ high: z.number(), action: z.number(), submissions: z.number() });
 
-// The facts for the quarterly report. Each list is short, thus the page stays one or two printed pages.
-export const reportData = (db: D1Database) => async (q: ReportQuery) => {
-  const reg = whereOf([between({ ...q, kind: 'regulatory' }), clause(IS_RELEVANT_SQL)]);
-  const enf = whereOf([between({ ...q, kind: 'enforcement' }), clause(IS_WASTE_OPERATOR_SQL)]);
-  const [counts, changes, named, groups] = await db.batch([
+// The facts for the report, for the filters of the inbox. Dismissed items are not in it.
+// Each list is short, thus the report stays one or two printed pages.
+export const reportData = (db: D1Database) => async ({ scope }: { scope: Scope & { period: Period } }) => {
+  const kept = clause(`(triage.status IS NULL OR triage.status != 'dismissed')`);
+  const reg = whereOf([...scopeClauses(scope), clause(`kind = 'regulatory'`), clause(IS_RELEVANT_SQL), kept]);
+  const listed = whereOf([...scopeClauses(scope), clause(IN_INBOX_SQL), kept, clause(`(${ITEM_PRIORITY_SQL} >= ${PRIORITY_HIGH} OR party_group IS 'jjr')`)]);
+  // All records about waste operators, thus the counts compare the groups.
+  const enf = whereOf([...scopeClauses({ ...scope, topic: undefined, type: undefined }), clause(`kind = 'enforcement'`), clause(IS_WASTE_OPERATOR_SQL)]);
+  const acting = whereOf([...scopeClauses({ ...scope, period: undefined }), clause(`triage.status = 'acting'`)]);
+  const [counts, top, groups, open] = await db.batch([
     db
       .prepare(
         `SELECT COALESCE(SUM(${PRIORITY_SQL} >= ${PRIORITY_HIGH}), 0) AS high,
            COALESCE(SUM(${flagSql('actionRequired')}), 0) AS action, COALESCE(SUM(${flagSql('submissionsOpen')}), 0) AS submissions
-         FROM items WHERE ${reg.sql}`,
+         FROM ${INBOX_FROM} WHERE ${reg.sql}`,
       )
       .bind(...reg.params),
+    db.prepare(`SELECT ${INBOX_COLUMNS} FROM ${INBOX_FROM} WHERE ${listed.sql} ORDER BY ${INBOX_ORDER} LIMIT 20`).bind(...listed.params),
     db
       .prepare(
-        `SELECT ${ITEM_COLUMNS}, ${PRIORITY_SQL} AS priority FROM items
-         WHERE ${reg.sql} AND (${PRIORITY_SQL} >= ${PRIORITY_HIGH} OR party_group IS 'jjr')
-         ORDER BY party_group IS 'jjr' DESC, priority DESC LIMIT 15`,
+        `SELECT COALESCE(party_group, 'other') AS grp, COUNT(*) AS n, SUM(penalty_aud) AS penalty, SUM(${IS_SERIOUS_SQL}) AS serious
+         FROM items WHERE ${enf.sql} GROUP BY grp`,
       )
-      .bind(...reg.params),
-    db.prepare(`SELECT ${ITEM_COLUMNS} FROM items WHERE ${enf.sql} AND party_group IS NOT NULL ORDER BY published_at DESC LIMIT 40`).bind(...enf.params),
-    groupCounts(db, enf),
+      .bind(...enf.params),
+    db.prepare(`SELECT ${INBOX_COLUMNS} FROM ${INBOX_FROM} WHERE ${acting.sql} ORDER BY ${INBOX_ORDER} LIMIT 50`).bind(...acting.params),
   ]);
   return {
     counts: ReportCounts.parse(counts?.results[0]),
-    changes: parseRanked(changes ?? { results: [] }),
-    named: parseRows(named ?? { results: [] }),
+    top: parseInbox(top ?? { results: [] }),
     groups: GroupRow.array().parse(groups?.results ?? []),
+    acting: parseInbox(open ?? { results: [] }),
   };
 };

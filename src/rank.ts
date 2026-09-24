@@ -39,9 +39,6 @@ export const PRIORITY_SQL = `(${RELEVANCE_SQL} * (${WEIGHTS.impact} * ${answer('
 // An item that names JJ Richards is always relevant.
 export const IS_RELEVANT_SQL = `(((${P_WASTE} + ${P_ENVIRONMENT} >= ${RELEVANT_MIN} OR ${P_FLEET} >= ${FLAG_MIN}) AND ${PRIORITY_SQL} >= ${PRIORITY_MIN}) OR party_group IS 'jjr')`;
 
-// The badge band of a regulatory item. "hidden" is below the relevance gate.
-export const PRIORITY_BAND_SQL = `(CASE WHEN NOT ${IS_RELEVANT_SQL} THEN 'hidden' WHEN ${PRIORITY_SQL} >= ${PRIORITY_HIGH} THEN 'high' WHEN ${PRIORITY_SQL} >= ${PRIORITY_MEDIUM} THEN 'medium' ELSE 'low' END)`;
-
 // Only known answer keys can go into the SQL.
 export type FlagKey = (typeof LINES_OF_BUSINESS)[number] | (typeof TOPICS)[number] | 'actionRequired' | 'submissionsOpen';
 export const flagSql = (key: FlagKey) => `(${answer(`${key}.noul`)} >= ${FLAG_MIN})`;
@@ -51,4 +48,15 @@ export const flagSql = (key: FlagKey) => `(${answer(`${key}.noul`)} >= ${FLAG_MI
 export const IS_WASTE_OPERATOR_SQL = `(party_group IS NOT NULL OR waste_activity = 1 OR ${answer('wasteOperator.noul')} >= ${WASTE_OPERATOR_MIN})`;
 
 export const IS_SERIOUS_SQL = `(${answer('severity.score')} >= ${SERIOUS_MIN})`;
-export const OFFENCE_SQL = `json_extract(answers, '$.offence.choice')`;
+
+// Enforcement priority: serious conduct that can also happen in own operations ranks highest.
+// The severity Score has 4 levels, 0 to 3. Calibrate on real data.
+const ENFORCEMENT_PRIORITY_SQL = `(${answer('severity.score')} / 3.0 * (0.5 + 0.5 * ${answer('similarRisk.noul')}))`;
+
+// One priority for both kinds, thus the inbox can sort them in one list.
+export const ITEM_PRIORITY_SQL = `(CASE kind WHEN 'regulatory' THEN ${PRIORITY_SQL} ELSE ${ENFORCEMENT_PRIORITY_SQL} END)`;
+
+// An enforcement record is in the inbox when it is about a waste operator, and it names a known group or the conduct is serious.
+const IN_INBOX_ENFORCEMENT_SQL = `(${IS_WASTE_OPERATOR_SQL} AND (party_group IS NOT NULL OR ${IS_SERIOUS_SQL}))`;
+
+export const IN_INBOX_SQL = `(CASE kind WHEN 'regulatory' THEN ${IS_RELEVANT_SQL} ELSE ${IN_INBOX_ENFORCEMENT_SQL} END)`;

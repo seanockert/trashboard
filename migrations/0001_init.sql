@@ -76,17 +76,11 @@ CREATE TABLE source_runs (
 
 CREATE INDEX source_runs_recent ON source_runs (source_id, started_at DESC);
 
--- Items the user tracks, with a short note. Tags and text can change; the row stays.
-CREATE TABLE tracked (
+-- The triage state of an item. No row: the item is new. Tags and text can change; the row stays.
+-- "acting" and "done" mark an item as useful, "dismissed" as not useful. These are the labels that measure the priority.
+CREATE TABLE triage (
   item_id    TEXT PRIMARY KEY REFERENCES items (id) ON DELETE CASCADE,
-  status     TEXT NOT NULL CHECK (status IN ('watching', 'acting')),
+  status     TEXT NOT NULL CHECK (status IN ('acting', 'done', 'dismissed')),
   note       TEXT NOT NULL DEFAULT '',
-  updated_at TEXT NOT NULL
-);
-
--- The user's rating of an item, to measure the priority. The row stays when tags change.
-CREATE TABLE labels (
-  item_id    TEXT PRIMARY KEY REFERENCES items (id) ON DELETE CASCADE,
-  useful     INTEGER NOT NULL CHECK (useful IN (0, 1)),
   updated_at TEXT NOT NULL
 );

@@ -62,7 +62,11 @@
       const options = field.options.filter((o) => has(o.token, match[2]) || has(o.label, match[2]));
       return [{ head: field.label }, ...options.map((o) => ({ kind: 'value', field, option: o }))];
     }
-    const keys = spec.filter((f) => typed === '' || has(f.key, typed) || has(f.label, typed));
+    // A key that is in the bar already is not in the list. The user changes its value in place.
+    const { start, end } = wordAt();
+    const others = `${input.value.slice(0, start)} ${input.value.slice(end)}`.split(/\s+/);
+    const used = new Set(others.map((w) => TOKEN.exec(w)?.[1].toLowerCase()).filter(Boolean));
+    const keys = spec.filter((f) => !used.has(f.key) && (typed === '' || has(f.key, typed) || has(f.label, typed)));
     const values =
       typed === ''
         ? []
@@ -99,7 +103,7 @@
       note.textContent = 'Enter';
     } else {
       main.textContent = `✦ Ask AI: “${item.text}”`;
-      note.textContent = 'Searches all items';
+      note.textContent = 'Digs through everything';
     }
     el.append(main, note);
     el.addEventListener('mousedown', (e) => {

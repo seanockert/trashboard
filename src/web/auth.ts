@@ -6,7 +6,7 @@ const COOKIE = 'trashboard_session';
 const SESSION_DAYS = 30;
 
 // Only a local path is a safe place to send the user after login. A browser reads "/\" as "//", which is another site.
-export const safeNext = (next: unknown) => (typeof next === 'string' && /^\/(?![/\\])/.test(next) ? next : '/changes');
+export const safeNext = (next: unknown) => (typeof next === 'string' && /^\/(?![/\\])/.test(next) ? next : '/');
 
 const encoder = new TextEncoder();
 
@@ -43,7 +43,7 @@ export const requireSession: MiddlewareHandler<{ Bindings: Env }> = async (c, ne
   const expires = typeof value === 'string' ? Number(value) : Number.NaN;
   if (!Number.isFinite(expires) || expires < Date.now()) {
     // A form post cannot repeat after login, thus it goes to the default page.
-    const next = c.req.method === 'GET' ? `${c.req.path}${new URL(c.req.url).search}` : '/changes';
+    const next = c.req.method === 'GET' ? `${c.req.path}${new URL(c.req.url).search}` : '/';
     return c.redirect(`/login?next=${encodeURIComponent(next)}`);
   }
   await next();

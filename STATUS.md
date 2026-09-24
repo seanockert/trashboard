@@ -19,18 +19,17 @@ Workers AI writes a short summary for each card that the views show by default.
 | --- | --- |
 | Project setup (TypeScript, Hono, Wrangler, D1, Queues, Cron) | Done |
 | 21 sources (14 regulatory, 7 enforcement) | Done, tested live |
-| Regulatory changes view | Done |
-| Enforcement view (JJR and competitors) | Done |
+| Inbox: one ranked list of regulatory items and enforcement records, with New, Acting and Done tabs | Done |
 | Search (D1 full-text search, then Jev rerank) | Done |
 | Password login, 5 attempts each minute for each IP address | Done |
-| Bookmarks (Watching or Acting, with a note) | Done |
-| Deadlines view (submission close dates and start dates from the source text) | Done |
+| Triage on each card: Act, Dismiss, a note while acting, Done | Done |
+| Due dates at the top of the inbox (submission close dates and start dates from the source text, next 30 days) | Done |
 | Company tag on regulatory items. Items that name JJ Richards are always shown, first | Done |
-| Penalty benchmarks by conduct on the Enforcement view | Done |
-| Quarterly report, to print or save as PDF | Done |
-| Priority check: "Useful to you?" labels and the useful share for each priority band | Done. Needs labels from the user |
+| Omni-bar filters with suggestions: period (also each quarter), jurisdiction, topic, type, company | Done |
+| Report: the inbox filters on one page, to print or save as PDF | Done |
+| Penalty benchmarks by conduct, for the enforcement records in search results | Done |
 | Card summaries (Workers AI, Llama 3.1 8B) | Done. Not deployed |
-| Unit tests (parsers, paging, company filter, dates, penalty selection, summary checks) | Done, 95 tests |
+| Unit tests (parsers, paging, company filter, dates, penalty selection, summary checks, filters) | Done, 113 tests |
 | Fit the Workers Free plan (10 ms CPU, 50 subrequests for each invocation) | Done locally. Check real CPU time after deploy |
 | Deploy to Cloudflare (`trashboard.seanockert.workers.dev`) | Not started |
 | Labelled test set (about 100 items) to measure tag accuracy | Not started. Needs labels from the user |
@@ -63,10 +62,9 @@ Workers AI writes a short summary for each card that the views show by default.
 
 ## Backfill
 
-"Load past 12 months" on the Sources page sends a run with a start date to each source.
+The first run of each source (the daily run or "Update now" on the Sources page) sends a start date 12 months back. Later runs load only what is new.
 The Federal Register, VIC and NSW EPA sources page back to the start date. QLD and TAS use the query endpoint behind the browse pages (not a documented API). NSW legislation and the enforcement sources ignore the start date. The enforcement sources hold their full history already.
 A new item gets tags. An item that is stored already, with the same content, does not.
-The first run of the Federal Register and VIC sources also goes back 12 months.
 
 ## Measured results (local run, 2026-09-23)
 
@@ -102,7 +100,16 @@ A better measure is precision above a priority threshold, and recall on a labell
 - Queue budget: 10,000 operations each day. A full new tag of all items uses about 700.
 - Measured locally in Bun (warm): the largest parse is the WA page at 5.5 ms. It is 17.5 ms on a cold start. Check the real CPU time in Workers Logs after deploy. If it is too high, split the WA page into one message for each table.
 
-## Deadlines, company tags and labels
+## Inbox
+
+- One list for both kinds of item. Items that name JJ Richards are first, then the highest priority. The ranking policy is in `src/rank.ts`.
+- Regulatory items pass the relevance gate. Enforcement records pass when the company is a waste operator, and the record names a known group or the conduct is serious (`IN_INBOX_SQL`).
+- The enforcement priority is severity times the risk that the conduct can happen in own operations. It is not calibrated yet.
+- The New tab shows the last 90 days when the user sets no period. The Acting and Done tabs show all dates, thus open work does not go away.
+- `?view=report` shows the same filters as a report. With no period, the report is for the current quarter. Dismissed items are not in the report.
+- The `triage` table holds the labels that measure the priority: Act and Done mean useful, Dismiss means not useful. Get at least 20 labels in each band before you change a weight or a threshold.
+
+## Dates, company tags and labels
 
 - Code finds each date in the text of a regulatory item. Jev selects the date when submissions close and the date when the rule starts to apply, as for penalties. A stored date is always a date that the source states.
 - A regulatory item names a company group when a group name is in its title. JJ Richards counts in the body too.
@@ -113,8 +120,7 @@ A better measure is precision above a priority threshold, and recall on a labell
 - The DCCEEW and WA DWER sites give the dates as fields. The source writes them in words in the body, thus the same date step reads all consultation sites.
 - `wasteFocus` rates a rule for all vehicles as general. The `fleetRule` question finds the vehicle rules that apply to the trucks and drivers of the company. An item with `fleetRule` at 0.6 or more passes the relevance gate, and its relevance for the priority is the larger of the waste relevance and `fleetRule`.
 - A local run on 2026-09-24 (tag version 4): 33 items in the last 12 months passed the gate because of `fleetRule`, 5 of them High. The 20 NHVR route map notices and the permits for road trains, cranes and livestock carriers stayed hidden. About 9 of the 33 were not useful, for example Port of Brisbane mass permits and road closures.
-- The Deadlines view had 13 dates in the next 90 days, from NSW, VIC and the Commonwealth.
-- The Priority check page shows the useful share for each priority band and item type. Label at least 20 items in each band before you change a weight or a threshold.
+- A check on 2026-09-24 found 13 dates in the next 90 days, from NSW, VIC and the Commonwealth.
 - At 2026-09-24, the live site had 206 relevant items in the last 12 months: 51 High, 67 Medium and 88 Low. Of the 51 High items, 23 were regulator news about enforcement against other companies.
 
 ## Sources that were checked and not added

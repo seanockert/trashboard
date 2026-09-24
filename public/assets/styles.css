@@ -290,13 +290,13 @@ dialog .actions {
 }
 
 /* Boxes. The .scroll box holds a table. */
-.card, .filters, .login, .stat, .empty, .scroll {
+.card, .login, .stat, .empty, .scroll {
   background: var(--color-panel);
   border-radius: var(--radius-large);
   box-shadow: var(--shadow-box);
 }
 
-dialog, .menu .items, .bookmark form {
+dialog, .menu .items {
   background: var(--color-panel);
   border-radius: var(--radius-large);
   box-shadow: var(--shadow-float);
@@ -311,6 +311,7 @@ dialog, .menu .items, .bookmark form {
   a {
     text-decoration: none;
     color: var(--color-muted);
+    padding: var(--size-quarter)
   }
 
   a.on {
@@ -329,21 +330,15 @@ dialog, .menu .items, .bookmark form {
   }
 }
 
-.search {
-  flex: 1 1 11rem;
-  max-width: 18rem;
-
-  input {
-    width: 100%;
-  }
+.search input {
+  width: 100%;
 }
 
 .menu {
   position: relative;
 }
 
-.menu summary,
-.bookmark summary {
+.menu summary {
   list-style: none;
   cursor: pointer;
   display: flex;
@@ -352,8 +347,7 @@ dialog, .menu .items, .bookmark form {
   color: var(--color-muted);
 }
 
-.menu summary::-webkit-details-marker,
-.bookmark summary::-webkit-details-marker {
+.menu summary::-webkit-details-marker {
   display: none;
 }
 
@@ -400,8 +394,7 @@ dialog, .menu .items, .bookmark form {
   justify-content: center;
 }
 
-.page > h2,
-.about h2 {
+.page > h2 {
   padding-top: var(--size-base);
 }
 
@@ -437,21 +430,7 @@ dialog, .menu .items, .bookmark form {
   overflow-x: auto;
 }
 
-.about ul {
-  display: grid;
-  gap: var(--size-half);
-}
 
-.filters {
-  --gap: var(--size-base) var(--size-2x);
-  align-items: end;
-  padding: var(--size-base);
-
-  label {
-    font-size: var(--font-size-note);
-    color: var(--color-muted);
-  }
-}
 
 /* Omni-bar. The input text is transparent. The mirror behind it shows the same text, with the tokens in colour. */
 .omni-box {
@@ -500,6 +479,10 @@ dialog, .menu .items, .bookmark form {
 
 .omni .v {
   color: var(--color-brand);
+}
+
+/* Bold only in the list. Bold in the mirror makes the text wider than the input text, thus the caret is in the wrong place. */
+.omni-pop .v {
   font-weight: 600;
 }
 
@@ -548,10 +531,6 @@ dialog, .menu .items, .bookmark form {
   background: var(--color-bg);
 }
 
-.omni-item.on {
-  box-shadow: inset 2px 0 0 var(--color-brand);
-}
-
 .omni-toggles {
   font-size: var(--font-size-note);
 }
@@ -580,7 +559,7 @@ dialog, .menu .items, .bookmark form {
 /* Cards */
 .card {
   position: relative;
-  padding: var(--size-base) var(--size-4x) var(--size-base) var(--size-2x);
+  padding: var(--size-base) var(--size-2x);
 
   .title {
     font-size: 1.125rem;
@@ -662,7 +641,7 @@ a.tag.on {
 }
 
 .prio.medium,
-.pill.watching {
+.pill.done {
   background: var(--color-brand-soft);
   color: var(--color-brand);
 }
@@ -677,63 +656,54 @@ a.tag.on {
   color: var(--color-warn);
 }
 
-/* Bookmark */
-.bookmark {
-  position: absolute;
-  top: var(--size-half);
-  right: var(--size-half);
-
-  form {
-    position: absolute;
-    right: 0;
-    top: calc(100% + var(--size-half));
-    z-index: 10;
-    width: min(18rem, 80vw);
-    padding: var(--size-base);
-    font-size: var(--font-size-note);
-  }
+.pill.dismissed {
+  background: var(--color-border);
+  color: var(--color-muted);
 }
 
-.bookmark summary:hover,
-.bookmark[open] summary,
-.bookmark.watching summary {
-  color: var(--color-brand);
-}
-
-.bookmark summary:hover,
-.bookmark[open] summary {
-  background: var(--color-bg);
-}
-
-.bookmark.acting summary {
-  color: var(--color-warn);
-}
-
-.track {
-  align-items: baseline;
+/* Triage. The buttons are at the bottom of the card. */
+.triage {
   border-top: 1px solid var(--color-border);
   padding-top: var(--size-half);
   font-size: var(--font-size-note);
-}
-
-.track-note {
-  color: var(--color-text);
-  white-space: pre-line;
-}
-
-form.label {
-  justify-content: flex-end;
 
   button {
     padding: var(--size-quarter) var(--size-base);
-    font-size: var(--font-size-small);
+    font-size: var(--font-size-note);
   }
 
-  button.on {
-    background: var(--color-brand-soft);
-    color: var(--color-brand);
-    border-color: var(--color-brand);
+  .pill {
+    font-size: var(--font-size-small);
+  }
+}
+
+.triage-note {
+  color: var(--color-text);
+  white-space: pre-line;
+  font-size: var(--font-size-note);
+}
+
+td .pill {
+  display: inline-block;
+  font-size: var(--font-size-small);
+}
+
+/* Tabs */
+.tabs {
+  --gap: var(--size-2x);
+  border-bottom: 1px solid var(--color-border);
+
+  a {
+    padding: var(--size-half) 0;
+    text-decoration: none;
+    color: var(--color-muted);
+    border-bottom: 2px solid transparent;
+  }
+
+  a.on {
+    color: var(--color-text);
     font-weight: 600;
+    border-bottom-color: var(--color-brand);
   }
 }
 
@@ -760,7 +730,7 @@ form.label {
 }
 
 @media print {
-  .top, .no-print, dialog, .bookmark, form.label {
+  .top, .no-print, dialog, .triage {
     display: none !important;
   }
 

@@ -4,10 +4,10 @@ import type { Summary } from './summary';
 export const Jurisdiction = z.enum(['CTH', 'QLD', 'NSW', 'VIC', 'SA', 'WA', 'TAS', 'NT', 'ACT']);
 export type Jurisdiction = z.infer<typeof Jurisdiction>;
 
-// Tracking: the user marks an item and adds a note.
-export const TrackStatus = z.enum(['watching', 'acting']);
-export type TrackStatus = z.infer<typeof TrackStatus>;
-export type Tracking = { status: TrackStatus; note: string };
+// Triage: an item with no status is new. The user acts on it, then marks it done, or dismisses it.
+export const TriageStatus = z.enum(['acting', 'done', 'dismissed']);
+export type TriageStatus = z.infer<typeof TriageStatus>;
+export type Triage = { status: TriageStatus; note: string };
 
 // The longest source text that goes to Jev and into search. Jev accuracy
 // drops when the state holds much text that does not help the judgment.

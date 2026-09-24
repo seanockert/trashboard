@@ -1,24 +1,21 @@
 import type { Child } from 'hono/jsx';
 
 const NAV = [
-  { href: '/changes', label: 'Regulatory changes' },
-  { href: '/enforcement', label: 'Enforcement' },
-  { href: '/deadlines', label: 'Deadlines' },
-  { href: '/tracked', label: 'Bookmarks' },
-  { href: '/report', label: 'Report' },
+  { href: '/', label: 'Inbox' },
+  { href: '/search', label: 'Search' },
 ] as const;
 
 const INTRO_KEY = 'trashboard_intro';
 
-// Shows the intro one time, closes the settings menu and bookmark forms on an outside click,
-// and puts the cursor in the search box when the user types "/".
+// Shows the intro one time, closes the settings menu on an outside click,
+// and puts the cursor in the search box of the page when the user types "/".
 const SCRIPT = `
 const intro = document.getElementById('intro');
 if (intro && !localStorage.getItem('${INTRO_KEY}')) intro.showModal();
 intro?.addEventListener('close', () => localStorage.setItem('${INTRO_KEY}', '1'));
 intro?.addEventListener('click', (e) => { if (e.target === intro) intro.close(); });
 document.addEventListener('click', (e) => {
-  document.querySelectorAll('details.menu[open], details.bookmark[open]').forEach((menu) => { if (!menu.contains(e.target)) menu.open = false; });
+  document.querySelectorAll('details.menu[open]').forEach((menu) => { if (!menu.contains(e.target)) menu.open = false; });
 });
 document.addEventListener('keydown', (e) => {
   if (e.key !== '/' || e.target.closest('input, select, textarea')) return;
@@ -27,10 +24,9 @@ document.addEventListener('keydown', (e) => {
 });
 `;
 
-const CogIcon = () => (
-  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-    <circle cx="12" cy="12" r="3" />
-    <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+const MenuIcon = () => (
+  <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+    <path stroke-linecap="round" stroke-linejoin="round" d="M3.8 6.8h16.5M3.8 12h16.5M3.8 17.3h16.5"/>
   </svg>
 );
 
@@ -38,19 +34,18 @@ const Intro = () => (
   <dialog id="intro" aria-labelledby="intro-title">
     <div class="stack">
       <h2 id="intro-title">Welcome to Trashboard</h2>
-      <p>Waste industry law and enforcement news, updated each morning.</p>
-      <p>Cut through the noise. See only what affects waste, most important first.</p>
-      <p>Click a tag to filter.</p>
+      <p>Waste industry law and enforcement news, fresh each morning.</p>
+      <p>We dig through the rubbish so you don’t have to. JJ Richards first, then the big stuff.</p>
+      <p>Act on an item or chuck it. Type in the filter box to rummage by topic, place or company.</p>
+      <p class="note">The AI can get things wrong. Check the source before you act.</p>
       <form method="dialog" class="actions inline">
-        <a href="/about">How it works</a>
-        <button autofocus>Start</button>
+        <button autofocus>Let’s dig in</button>
       </form>
     </div>
   </dialog>
 );
 
-// `search` is false on a page that has its own omni-bar, thus the page shows one search input only.
-export const Layout = ({ title, path, query = '', search = true, children }: { title: string; path: string | null; query?: string; search?: boolean; children: Child }) => (
+export const Layout = ({ title, path, children }: { title: string; path: string | null; children: Child }) => (
   <html lang="en-AU">
     <head>
       <meta charset="utf-8" />
@@ -62,27 +57,20 @@ export const Layout = ({ title, path, query = '', search = true, children }: { t
     </head>
     <body>
       {path !== null && (
-        <nav class="top inline-2x inline-wrap">
+        <nav class="top inline-wrap">
           <div class="brand inline-zero"><img src="/assets/trashboard-icon-sm.png" alt="" /> Trashboard</div>
           {NAV.map((link) => (
-            <a href={link.href} class={path.startsWith(link.href) ? 'on' : ''} aria-current={path.startsWith(link.href) ? 'page' : undefined}>
+            <a href={link.href} class={path === link.href ? 'on' : ''} aria-current={path === link.href ? 'page' : undefined}>
               {link.label}
             </a>
           ))}
-          {search && (
-            <form class="search" method="get" action="/search" role="search">
-              <input type="search" id="q" name="q" value={query} placeholder="Search or ask a question" aria-label="Search" />
-            </form>
-          )}
           <details class="menu">
             <summary aria-label="Settings" title="Settings">
-              <CogIcon />
+              <MenuIcon />
             </summary>
             <div class="items stack-zero">
-              <a href="/about">About Trashboard</a>
               <button type="button" onclick="document.getElementById('intro').showModal()">Show welcome</button>
-              <a href="/labels">Priority check</a>
-              <a href="/sources">Sources and runs</a>
+              <a href="/sources">Sources</a>
               <a href="/logout">Log out</a>
             </div>
           </details>

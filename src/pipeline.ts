@@ -3,7 +3,7 @@ import { match } from 'ts-pattern';
 import { readSecrets } from './env';
 import { BODY_MAX, NewItem, type StoredItem } from './items';
 import { groupOf, isCompanyName, PARTIES_VERSION } from './parties';
-import { deleteParties, getCursor, getItems, recordRun, saveAnswers, saveDetail, saveGroups, saveSummary, staleGroupIds, unsummarisedIds, untaggedIds, upsertItems } from './db';
+import { deleteParties, getCursor, getItems, recordRun, saveAnswers, saveDetail, saveGroups, saveSummary, sourcesRunBefore, staleGroupIds, unsummarisedIds, untaggedAmong, untaggedIds, upsertItems } from './db';
 import { makeClient, tagItem, USD_PER_MILLION_INPUT_TOKENS } from './jev/tag';
 import { TAG_VERSION } from './jev/questions';
 import { SOURCES, sourceById } from './sources';
@@ -53,9 +53,36 @@ const checkRecords = (records: unknown[]): Checked =>
 
 const chunks = <T>(list: T[], size: number) => Array.from({ length: Math.ceil(list.length / size) }, (_, i) => list.slice(i * size, (i + 1) * size));
 
-export const scheduleAll = async (env: Env, since: string | null = null) => {
-  await env.INGEST_QUEUE.sendBatch(SOURCES.map((source) => ({ body: { sourceId: source.id, page: null, since } })));
+// A source that has not run before loads the past 12 months. The other sources load only what is new.
+const FIRST_RUN_DAYS = 365;
+
+export const scheduleAll = async (env: Env) => {
+  const runBefore = new Set(await sourcesRunBefore(env.DB)());
+  const firstRunSince = new Date(Date.now() - FIRST_RUN_DAYS * 86_400_000).toISOString();
+  await env.INGEST_QUEUE.sendBatch(SOURCES.map((source) => ({ body: { sourceId: source.id, page: null, since: runBefore.has(source.id) ? null : firstRunSince } })));
 };
+
+// The daily run also sends items that have no current tags, for example
+// after a failed batch or a question change.
+const RETAG_LIMIT = 2000;
+
+// About 6 neurons each, thus about 3,600 of the 10,000 free neurons each day.
+// New items get a summary when they get tags. This limit is for older items.
+const SUMMARY_LIMIT = 600;
+
+// Items that get their group again each day after the alias list changes.
+const REGROUP_LIMIT = 5000;
+
+// The daily run, and the "Update now" button. Jev tags only items that are new,
+// changed, or have tags from an older question version. Thus a second run costs almost nothing.
+// `minAgeHours` 6 skips new items that the source runs send to the queue already.
+export const updateAll = (env: Env) =>
+  Promise.all([
+    scheduleAll(env),
+    retagStale({ env, limit: RETAG_LIMIT, minAgeHours: 6 }),
+    summariseStale({ env, limit: SUMMARY_LIMIT }),
+    regroupStale({ env, limit: REGROUP_LIMIT }),
+  ]);
 
 // A send batch holds at most 100 messages.
 const sendAll = async (env: Env, messages: MessageSendRequest[]) => {
@@ -202,7 +229,8 @@ export const handleSummaryMessage = async ({ env, message }: { env: Env; message
 // Returns the IDs that failed.
 export const processItems = async ({ env, itemIds, detailRequired }: { env: Env; itemIds: string[]; detailRequired: boolean }) => {
   const client = makeClient(readSecrets(env).TYPESAFE_API_KEY);
-  const loaded = await getItems(env.DB)(itemIds);
+  // An item can be in the queue two times, for example from a run and a retag. Jev tags it one time only.
+  const loaded = await getItems(env.DB)(await untaggedAmong(env.DB)({ version: TAG_VERSION, ids: itemIds }));
   const detailed = await Promise.allSettled(loaded.map((item) => withDetail({ env, item, required: detailRequired })));
   const ready = detailed.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []));
   const detailFailures = detailed.flatMap((result, i) => (result.status === 'rejected' ? [loaded[i]?.id ?? ''] : []));
