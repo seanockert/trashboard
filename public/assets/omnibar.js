@@ -173,9 +173,22 @@ const startOmni = () => {
     render();
   };
 
-  input.addEventListener('focus', render);
+  // On focus, a space after the last token puts the caret on a new word, thus "Filter by" shows at once.
+  input.addEventListener('focus', () => {
+    if (input.value !== '' && !input.value.endsWith(' ')) {
+      input.value += ' ';
+      input.setSelectionRange(input.value.length, input.value.length);
+      paint();
+    }
+    render();
+  });
   input.addEventListener('click', render);
-  input.addEventListener('blur', close);
+  // Remove the space that focus added.
+  input.addEventListener('blur', () => {
+    input.value = input.value.trimEnd();
+    paint();
+    close();
+  });
   input.addEventListener('scroll', () => (mirror.scrollLeft = input.scrollLeft));
   input.addEventListener('input', () => {
     paint();

@@ -67,6 +67,9 @@ export const Layout = ({ title, path, menu, children }: { title: string; path: s
       <script src="/assets/htmx-2.0.11.min.js" defer />
       <script src="/assets/omnibar.js" defer />
       <script type="module" dangerouslySetInnerHTML={{ __html: SCRIPT }} />
+      <link rel="preconnect" href="https://fonts.googleapis.com" />
+      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" />
+      <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:ital,wght@0,100..900;1,100..900&family=Nunito:ital,wght@0,200..1000;1,200..1000&family=Quicksand:wght@300..700&display=swap" rel="stylesheet" />
     </head>
     <body hx-boost="true">
       {path !== null && (

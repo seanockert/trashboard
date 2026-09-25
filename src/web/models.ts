@@ -198,19 +198,20 @@ export const priorityLevel = (priority: number): PriorityLevel =>
 
 // Short text for each level of the Scores in src/jev/questions.ts.
 // Most items are about waste (level 3), thus that level has no text.
-const FOCUS_REASONS = ['Not about waste', 'General business rule', 'Environment rule'];
-const IMPACT_REASONS = ['No effect on operations', 'Background only', 'Small admin change', 'Compliance change', 'Large cost or operations change'];
-const SEVERITY_REASONS = ['Admin matter', 'Small breach', 'Harm or risk of harm', 'Serious harm'];
+const FOCUS_REASONS = ['Not waste', 'General rule', 'Environment rule'];
+const IMPACT_REASONS = ['No effect', 'Background', 'Minor admin', 'Compliance change', 'Major cost'];
+const SEVERITY_REASONS = ['Admin', 'Minor breach', 'Harm risk', 'Serious harm'];
 
 // Why an item has its priority, from the Jev answers that make the priority.
 export const priorityReasons = (answers: RegulatoryAnswers): string[] => {
   const focus = Object.entries(answers.wasteFocus.probabilities).toSorted((a, b) => b[1] - a[1])[0]?.[0];
-  const focusReason = answers.fleetRule.noul >= FLAG_MIN && Number(focus) < 2 ? 'Rule for your trucks' : FOCUS_REASONS[Number(focus)];
+  const focusReason = answers.fleetRule.noul >= FLAG_MIN && Number(focus) < 2 ? 'Fleet rule' : FOCUS_REASONS[Number(focus)];
   return [focusReason, IMPACT_REASONS[Math.round(answers.impact.score)]].filter((text) => text !== undefined);
 };
 
+// The similar-risk flag is a tag on the card, not a reason.
 const enforcementReasons = (answers: EnforcementAnswers): string[] =>
-  [SEVERITY_REASONS[Math.round(answers.severity.score)], answers.similarRisk.noul >= FLAG_MIN ? 'Similar risk in own operations' : undefined].filter((text) => text !== undefined);
+  [SEVERITY_REASONS[Math.round(answers.severity.score)]].filter((text) => text !== undefined);
 
 // Only the rows on the page are parsed. D1 did the filters, the sort and the counts.
 export const toRows = (rows: InboxRow[]): Row[] =>

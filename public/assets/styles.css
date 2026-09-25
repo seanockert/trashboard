@@ -22,7 +22,7 @@
   --color-shadow: light-dark(hsl(0, 0%, 0%, 0.1), hsl(0, 0%, 0%, 0.5));
   --color-backdrop: hsl(0, 0%, 0%, 0.45);
   --easing-base: cubic-bezier(0.2, 1.75, 0.5, 0.6);
-  --font-stack: system-ui, sans-serif;
+  --font-stack: "Noto Sans", system-ui, sans-serif;
   --font-size: clamp(1rem, 3vw, 1.25rem);
   --font-size-small: 0.75rem;
   --font-size-note: 0.875rem;
@@ -60,7 +60,10 @@ body {
   min-height: 100dvh;
   display: grid;
   grid-template-rows: auto 1fr auto;
+  /* minmax(0, …) stops wide content (tables) from widening the page. */
+  grid-template-columns: minmax(0, 1fr);
   padding-top: env(safe-area-inset-top);
+  text-wrap: pretty;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -107,12 +110,22 @@ button {
     color: var(--color-brand);
   }
 
+  .icon-focus {
+    display: none;
+  }
+
   &.icon.secondary {
     color: var(--color-muted);
   }
 
   &.icon:hover, &.icon:focus-visible {
-    border-color: var(--color-brand-alt);
+    .icon-base {
+      display: none;
+    }
+
+    .icon-focus {
+      display: block;
+    }
   }
 }
 
@@ -317,7 +330,7 @@ dialog, .menu .items {
 
 /* Top bar */
 .top {
-  padding: var(--size-half) var(--size-2x);
+  padding: var(--size-half) var(--size-base);
   border-bottom: 1px solid var(--color-border);
   background: var(--color-panel);
 
@@ -616,9 +629,13 @@ dialog, .menu .items {
 }
 
 .meta {
-  --gap: var(--size-quarter) var(--size-base);
   font-size: var(--font-size-note);
   color: var(--color-muted);
+}
+
+/* The priority line is in the text colour, thus it stands out from the facts. */
+.why {
+  color: var(--color-text);
 }
 
 .tags {
@@ -874,12 +891,14 @@ td .pill {
 .tabs {
   --gap: var(--size-2x);
   border-bottom: 1px solid var(--color-border);
+  overflow: auto;
 
   a {
-    padding: var(--size-half) 0;
+    padding: var(--size-half) var(--size-base);
     text-decoration: none;
     color: var(--color-muted);
     border-bottom: 2px solid transparent;
+    white-space: nowrap;
   }
 
   a.on {

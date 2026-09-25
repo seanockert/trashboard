@@ -32,6 +32,9 @@ const aud = (n: number) => n.toLocaleString('en-AU', { style: 'currency', curren
 const date = (iso: string | null) =>
   iso === null ? 'No date' : new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 
+// The card date has no year when the year is the current year.
+const cardDate = (iso: string | null) => (iso !== null && iso.slice(0, 4) === today().slice(0, 4) ? date(iso).replace(/ \d{4}$/, '') : date(iso));
+
 // "1 item", "2 items".
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
 
@@ -128,10 +131,11 @@ const PRIORITY_HELP = {
 };
 
 // The level and the reasons tell the user why the item is in its place in the list.
+// Low items have no reasons, because the level tells enough.
 const Priority = ({ row }: { row: Row }) => (
-  <div class="inline-half" title={`${PRIORITY_HELP[row.kind]} Score: ${Math.round(row.priority * 100)} of 100.`}>
-    <div class={`prio ${row.level}`}>{PRIORITY_LABELS[row.level]}</div>
-    {row.reasons.length > 0 && <div>{row.reasons.join(' · ')}</div>}
+  <div class="why" title={`${PRIORITY_HELP[row.kind]} Score: ${Math.round(row.priority * 100)} of 100.`}>
+    <span class={`prio ${row.level}`}>{PRIORITY_LABELS[row.level]}</span>
+    {row.level !== 'low' && row.reasons.length > 0 && <span> · {row.reasons.join(' · ')}</span>}
   </div>
 );
 
@@ -187,8 +191,9 @@ const DateTags = ({ item }: { item: StoredItem }) => {
 };
 
 const BookmarkIcon = () => (
-  <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-    <path stroke-linecap="round" stroke-linejoin="round" d="M6.5 4h11v16.5L12 16.5l-5.5 4z" />
+  <svg width="18" height="18" fill="none" viewBox="0 0 24 24">
+    <path class="icon-base" fill="currentColor" fill-rule="evenodd" clip-rule="evenodd" d="M16 4.4q-4-.6-8 0-.7.2-.9 1Q5.7 12 7 18.7l.1.9 3.7-3.5q1.2-.9 2.4 0l3.7 3.5.1-1q1.2-6.5-.1-13.2-.2-.8-1-1M7.7 3q4.2-.6 8.4 0c1 .2 2 1 2.2 2.2q1.4 6.9.1 13.9l-.2 1.2c-.2 1-1.5 1.4-2.2.7l-4-3.7h-.3L8 20.9c-.7.7-2 .3-2.2-.7L5.5 19q-1.2-7 .1-14 .5-1.7 2.2-2" />
+    <path class="icon-focus" fill="currentColor" d="M16.1 3.2a25 25 0 0 0-8.2 0q-1.6.4-2 2-1.5 6.8-.2 13.7l.4 1.9c0 .5.8.8 1.2.4l4-3.9a1 1 0 0 1 1.4 0l4 3.9c.4.4 1.1.1 1.2-.4l.4-1.9Q19.5 12 18 5.1q-.4-1.5-2-2"/>
   </svg>
 );
 
@@ -267,13 +272,13 @@ const ItemCard = ({ row, filters, fields, back, badge }: { row: Row; filters: In
   const companyValue = fields.company.options.find((o) => o.value === group)?.value;
   const facts =
     row.kind === 'regulatory'
-      ? [item.jurisdiction, ITEM_TYPE_LABELS[row.answers.itemType.choice], date(item.publishedAt)]
-      : [item.jurisdiction, item.action, item.penaltyAud === null ? undefined : aud(item.penaltyAud), date(item.publishedAt)];
+      ? [item.jurisdiction, ITEM_TYPE_LABELS[row.answers.itemType.choice], cardDate(item.publishedAt)]
+      : [item.jurisdiction, item.action, item.penaltyAud === null ? undefined : aud(item.penaltyAud), cardDate(item.publishedAt)];
   const closesLater = item.closesOn !== null && item.closesOn >= today();
   return (
     <div class="card stack-half" id={anchor(item)}>
       <div class="card-head">
-        <div class="meta inline-wrap">
+        <div class="meta stack-quarter">
           {badge ?? <Priority row={row} />}
           <div>{facts.filter((fact) => fact !== undefined && fact !== '').join(' · ')}</div>
         </div>
@@ -290,6 +295,7 @@ const ItemCard = ({ row, filters, fields, back, badge }: { row: Row; filters: In
             text={row.kind === 'regulatory' ? `Names ${GROUP_LABELS[group] ?? group}` : (GROUP_LABELS[group] ?? group)}
           />
         )}
+        {row.kind === 'enforcement' && row.answers.similarRisk.noul >= FLAG_MIN && <div class="tag warn">Check own risk</div>}
         {row.kind === 'regulatory' && (
           <>
             {row.answers.actionRequired.noul >= FLAG_MIN && <div class="tag warn">Action may be needed</div>}
@@ -422,7 +428,7 @@ const DueList = ({ entries }: { entries: DateEntry[] }) => {
   );
 };
 
-const TAB_LABELS: Record<Tab, string> = { new: 'New', acting: 'Acting', done: 'Done & dismissed' };
+const TAB_LABELS: Record<Tab, string> = { new: 'New', acting: 'Acting', done: 'Dismissed' };
 
 const SORT_LABELS: Record<Sort, string> = { priority: 'Priority', newest: 'Newest', oldest: 'Oldest', triaged: 'Last touched' };
 
@@ -465,10 +471,10 @@ export const InboxPage = ({ model, filters, fields }: { model: InboxModel; filte
       <div class="inbox">
         <div class="inbox-bar stack">
           <OmniBar fields={fields} filters={filters} hidden={{ tab: filters.tab === 'new' ? undefined : filters.tab, sort: filters.sort }} />
-          <nav class="tabs inline" aria-label="Status">
+          <nav class="tabs inline-zero" aria-label="Status">
             {(['new', 'acting', 'done'] as const).map((tab) => (
               <a href={inboxHref({ ...filters, tab }, fields)} class={filters.tab === tab ? 'on' : ''} aria-current={filters.tab === tab ? 'page' : undefined}>
-                {TAB_LABELS[tab]} <span class="note">{model.counts[tab]}</span>
+                {TAB_LABELS[tab]} <span class="note">{model.counts[tab] > 0 ? model.counts[tab] : ''}</span>
               </a>
             ))}
             <SortSelect filters={filters} fields={fields} />
