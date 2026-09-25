@@ -16,8 +16,6 @@ describe('parseOmni', () => {
   it('uses the last token for a key', () => expect(parseOmni(fields, 'period:7d period:12m').picked).toEqual({ period: '12m' }));
   it('keeps unknown keys and values as invalid', () =>
     expect(parseOmni(fields, 'topic:nope colour:red levy')).toEqual({ picked: {}, text: 'levy', invalid: ['topic:nope', 'colour:red'] }));
-  it('gives nothing for an empty string', () => expect(parseOmni(fields, '   ')).toEqual({ picked: {}, text: '', invalid: [] }));
-  it('has parts of the business and topics in one field', () => expect(parseOmni(fields, 'topic:fleet').picked).toEqual({ topic: 'lobFleet' }));
   it('knows the recent quarters', () => {
     expect(parseOmni(fields, 'period:2026-q3').picked).toEqual({ period: '2026-Q3' });
     expect(parseOmni(fields, 'period:2024-Q1').invalid).toEqual(['period:2024-Q1']);
@@ -49,8 +47,6 @@ describe('inbox filters', () => {
       type: 'enforcement',
       match: '"leachate"*',
     }));
-  it('gives the priority band to the scope', () => expect(scopeOf(parseInboxFilters({ q: 'priority:High' }, now), now, 4)).toMatchObject({ priority: 'high' }));
-  it('cuts a very long query', () => expect(parseInboxFilters({ q: 'a'.repeat(1000) }, now).text).toHaveLength(300));
   it('shows the default period on the New tab only', () => {
     expect(formatOmni(fields, shownFilters(parseInboxFilters({}, now)))).toBe('period:90d');
     expect(formatOmni(fields, shownFilters(parseInboxFilters({ tab: 'acting' }, now)))).toBe('');

@@ -1,25 +1,19 @@
 import { z } from 'zod';
 import type { StoredItem } from './items';
 import { IS_RELEVANT_SQL, IS_WASTE_OPERATOR_SQL } from './rank';
+import { SOURCES } from './sources';
 
-// Short notes for the cards, from Workers AI. The free plan gives 10,000
-// neurons each day. One summary uses about 6.
-export const SUMMARY_MODEL = '@cf/meta/llama-3.1-8b-instruct-fp8-fast';
+// Workers AI free plan: 10,000 neurons/day. About 6 per summary.
+const SUMMARY_MODEL = '@cf/meta/llama-3.1-8b-instruct-fp8-fast';
 
-// Increase this when the prompt or the checks change. Items with an older
-// version get a new summary from the daily run.
+// Increase on prompt or check change. Daily run makes new summaries.
 export const SUMMARY_VERSION = 1;
 
-// Sources with prose text. Other sources give a list of fields, and a
-// summary of those adds nothing to the card.
-const SUMMARY_SOURCES = ['nsw-epa-news', 'epa-vic-news', 'qld-legislation', 'tas-legislation', 'vic-court', 'sa-prosecutions', 'worksafe-vic', 'safework-nsw', 'nsw-epa-yoursay', 'engage-vic', 'dcceew-consult', 'dwer-consult'];
+const SUMMARY_SOURCES = SOURCES.filter((source) => source.prose).map((source) => source.id);
 
-// Less text than this gives the model too little to work from.
 const MIN_BODY = 400;
 
-// Only items that the views show by default get a summary.
-// "+kind" stops SQLite from using the kind index for the OR. With that index, a
-// check of 10 IDs read all rows (about 9,500), not the 10 rows of the primary key.
+// "+kind" stops SQLite from using the kind index for the OR. Else 10 IDs read about 9,500 rows.
 export const NEEDS_SUMMARY_SQL = `(source_id IN (${SUMMARY_SOURCES.map((id) => `'${id}'`).join(', ')}) AND length(body) >= ${MIN_BODY}
   AND ((+kind = 'regulatory' AND ${IS_RELEVANT_SQL}) OR (+kind = 'enforcement' AND ${IS_WASTE_OPERATOR_SQL})))`;
 
@@ -32,8 +26,7 @@ Read the item and give JSON with two fields:
 - "points": 0 to 3 short facts from this item's text: a start date, a deadline, an amount, a penalty, or who must act. Each 12 words or fewer. Leave out a fact the text does not state. Do not write "not stated" or "no penalty". Do not list which laws it amends or which section it is made under.
 Use only facts in the text of this item. Do not guess.`;
 
-// A small model follows an example better than a rule. The example is about
-// a different subject, and `clean` drops any point copied from it.
+// Small model follows an example better than a rule. `clean` drops points copied from it.
 const EXAMPLE_ITEM =
   'Title: Court proceeding: Example Tyres Pty Ltd\n\nText:\nExample Tyres Pty Ltd pleaded guilty to storing 40,000 waste tyres above its permitted limit at its Bendigo site. ' +
   'On 3 March 2025 the Magistrates Court fined the company $60,000 and ordered it to remove the excess tyres within 90 days.';
@@ -45,7 +38,7 @@ const JSON_SCHEMA = {
   required: ['what', 'points'],
 };
 
-// News pages end with "Updated 12 March 2026". The model reads that date as a deadline.
+// Model reads "Updated <date>" as a deadline.
 export const modelText = (body: string) => body.replace(/\s*Updated \d{1,2} \w+ \d{4}\s*$/, '');
 
 const NUMBER_WORDS: Record<string, string> = {
@@ -53,16 +46,11 @@ const NUMBER_WORDS: Record<string, string> = {
   eleven: '11', twelve: '12', fourteen: '14', fifteen: '15', twenty: '20', thirty: '30', sixty: '60', ninety: '90',
 };
 const digits = (text: string) => text.match(/\d[\d,.]*/g)?.map((n) => n.replace(/[,.]+$/, '').replace(/,/g, '')) ?? [];
-// A number word in the text supports a digit in a point, for example "eight weeks" and "8 weeks".
 const textNumbers = (text: string) => new Set([...digits(text), ...(text.toLowerCase().match(/[a-z]+/g) ?? []).flatMap((w) => NUMBER_WORDS[w] ?? [])]);
 
 const FILLER = /,?\s*(on|by)?\s*(an\s+)?(unspecified|unknown)\s+date/gi;
 
-// Checks by code, because a small model breaks the rules in the prompt:
-// - a point with a number that is not in the text is dropped (a made-up date or amount)
-// - a point copied from the example is dropped
-// - a point that repeats "what" or holds the title is dropped
-// - the title at the start of "what" is removed
+// Checks by code: small model breaks prompt rules.
 export const clean = ({ answer, item }: { answer: Summary; item: Pick<StoredItem, 'title' | 'body'> }): Summary => {
   const have = textNumbers(item.body);
   const what = (answer.what.startsWith(item.title) ? answer.what.slice(item.title.length).replace(/^[\s,:.-]+/, '') : answer.what).trim();
@@ -72,7 +60,7 @@ export const clean = ({ answer, item }: { answer: Summary; item: Pick<StoredItem
   return { what, points: points.slice(0, 3) };
 };
 
-// JSON mode gives an object. Some models give it as a string.
+// JSON mode: some models give the object as a string.
 const parseAnswer = (response: unknown) => {
   if (typeof response !== 'string') return Summary.safeParse(response);
   try {
@@ -82,7 +70,6 @@ const parseAnswer = (response: unknown) => {
   }
 };
 
-// Returns null when the model gives no usable answer.
 export const summarise = async ({ ai, item }: { ai: Ai; item: StoredItem }): Promise<{ summary: Summary | null; neurons: number }> => {
   const res = (await ai.run(SUMMARY_MODEL, {
     messages: [

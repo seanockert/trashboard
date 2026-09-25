@@ -1,5 +1,4 @@
-// Fetches the SA EPA licence changes on this computer and sends them to the
-// worker. CloudFront refuses requests from Cloudflare, thus the worker cannot fetch them.
+// Runs locally: CloudFront blocks Cloudflare, so worker cannot fetch SA EPA.
 // Usage: TRASHBOARD_URL=https://... DASHBOARD_PASSWORD=... bun run relay:sa
 import { saPageUrl } from '../src/sources/licences';
 import { BROWSER_USER_AGENT } from '../src/sources/http';
@@ -8,7 +7,7 @@ const base = process.env.TRASHBOARD_URL;
 const password = process.env.DASHBOARD_PASSWORD;
 if (!base || !password) throw new Error('Set TRASHBOARD_URL and DASHBOARD_PASSWORD.');
 
-// One login for all pages. A login for each page would hit the login rate limit.
+// One login for all pages; avoids login rate limit.
 const login = await fetch(new URL('/login', base), { method: 'POST', body: new URLSearchParams({ password }), redirect: 'manual' });
 const cookie = login.headers.getSetCookie().find((c) => c.startsWith('trashboard_session='))?.split(';')[0];
 if (cookie === undefined) throw new Error(`Login failed: HTTP ${login.status}`);

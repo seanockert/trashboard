@@ -1,6 +1,4 @@
-// Suggestions for the omni-bar. See OmniBar in src/web/pages.tsx.
-// The form has the filter keys and values in `data-spec`: [{ key, label, options: [{ token, label }] }].
-// htmx swaps the body without a reload, thus the script starts again on each new form.
+// htmx swaps body without reload: init again on each new form.
 const startOmni = () => {
   const form = document.querySelector('form.omni');
   if (!form || form.dataset.started) return;
@@ -18,14 +16,12 @@ const startOmni = () => {
   const fieldOf = (key) => spec.find((f) => f.key === key.toLowerCase());
   const has = (text, part) => text.toLowerCase().includes(part.toLowerCase());
 
-  // The words that are not filter tokens. The AI search gets these.
   const freeText = () =>
     input.value
       .split(/\s+/)
       .filter((w) => w !== '' && !TOKEN.test(w))
       .join(' ');
 
-  // The word at the caret: its start and end, and the part before the caret.
   const wordAt = () => {
     const value = input.value;
     const caret = input.selectionStart ?? value.length;
@@ -34,7 +30,6 @@ const startOmni = () => {
     return { start, end: next === -1 ? value.length : next, typed: value.slice(start, caret) };
   };
 
-  // The same text as the input, with the keys and values in colour. The input text is transparent.
   const paint = () => {
     mirror.replaceChildren(
       ...input.value.split(/(\s+)/).map((word) => {
@@ -64,7 +59,7 @@ const startOmni = () => {
       const options = field.options.filter((o) => has(o.token, match[2]) || has(o.label, match[2]));
       return [{ head: field.label }, ...options.map((o) => ({ kind: 'value', field, option: o }))];
     }
-    // A key that is in the bar already is not in the list. The user changes its value in place.
+    // Key already in bar is not listed. User changes its value in place.
     const { start, end } = wordAt();
     const others = `${input.value.slice(0, start)} ${input.value.slice(end)}`.split(/\s+/);
     const used = new Set(others.map((w) => TOKEN.exec(w)?.[1].toLowerCase()).filter(Boolean));
@@ -104,7 +99,7 @@ const startOmni = () => {
       main.textContent = `Match the words “${item.text}”`;
       note.textContent = 'Enter';
     } else {
-      main.textContent = `✦ Ask AI: “${item.text}”`;
+      main.textContent = `Search for “${item.text}”`;
       note.textContent = 'Digs through everything';
     }
     el.append(main, note);
@@ -118,7 +113,7 @@ const startOmni = () => {
   const render = () => {
     const list = suggest();
     items = list.filter((entry) => !entry.head);
-    // After "key:" the first value is ready for Enter. Else Enter sends the form as typed.
+    // After "key:" first value is ready for Enter. Else Enter sends as typed.
     active = TOKEN.test(wordAt().typed) && items[0]?.kind === 'value' ? 0 : -1;
     let i = 0;
     pop.replaceChildren(
@@ -150,7 +145,7 @@ const startOmni = () => {
     active = -1;
   };
 
-  // Puts `text` in place of the word at the caret. A value token also removes other tokens for the same key.
+  // Value token also removes other tokens for same key.
   const replaceWord = (text, key) => {
     const { start, end } = wordAt();
     const drop = (part) => (key ? part.split(' ').filter((w) => !w.toLowerCase().startsWith(`${key}:`)).join(' ') : part);
@@ -163,7 +158,6 @@ const startOmni = () => {
 
   const pick = (item) => {
     if (item.kind === 'key') replaceWord(`${item.field.key}:`);
-    // A picked value applies at once. Free text waits for Enter.
     else if (item.kind === 'value') {
       replaceWord(`${item.field.key}:${item.option.token}`, item.field.key);
       return form.requestSubmit();
@@ -173,7 +167,7 @@ const startOmni = () => {
     render();
   };
 
-  // On focus, a space after the last token puts the caret on a new word, thus "Filter by" shows at once.
+  // Focus adds trailing space, so "Filter by" shows at once.
   input.addEventListener('focus', () => {
     if (input.value !== '' && !input.value.endsWith(' ')) {
       input.value += ' ';
@@ -183,7 +177,6 @@ const startOmni = () => {
     render();
   });
   input.addEventListener('click', render);
-  // Remove the space that focus added.
   input.addEventListener('blur', () => {
     input.value = input.value.trimEnd();
     paint();
@@ -213,7 +206,6 @@ const startOmni = () => {
       return pick(items[active]);
     }
   });
-  // Arrow keys and Home or End move the caret. The suggestions follow the word at the caret.
   input.addEventListener('keyup', (e) => {
     if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) render();
     mirror.scrollLeft = input.scrollLeft;

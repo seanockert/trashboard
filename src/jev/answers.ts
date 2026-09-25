@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import { ENFORCEMENT_QUESTIONS, REGULATORY_QUESTIONS } from './questions';
 
-// Stored answers come back from D1 as JSON text. These schemas check them.
 
 const Noul = z.object({ type: z.literal('noul'), noul: z.number() });
 const Score = z.object({ type: z.literal('score'), score: z.number(), confidence: z.number(), probabilities: z.record(z.string(), z.number()) });
@@ -20,7 +19,7 @@ const keysOf = <T extends Record<string, unknown>>(criteria: T) => {
 };
 
 export const ITEM_TYPES = keysOf(REGULATORY_QUESTIONS.itemType.criteria);
-export const OFFENCES = keysOf(ENFORCEMENT_QUESTIONS.offence.criteria);
+const OFFENCES = keysOf(ENFORCEMENT_QUESTIONS.offence.criteria);
 
 export const LINES_OF_BUSINESS = ['lobCollection', 'lobRecycling', 'lobLiquidHazardous', 'lobLandfill', 'lobFleet'] as const;
 export const TOPICS = [

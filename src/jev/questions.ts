@@ -1,7 +1,6 @@
 import { choice, noul, score } from '@typesafe-ai/sdk';
 
-// Increase this when a question or the state changes. Items with an older
-// version get new tags, thus two meanings of one answer never mix.
+// Increase on question/state change. Old versions get new tags, so meanings never mix.
 export const TAG_VERSION = 4;
 
 const READER =
@@ -22,10 +21,8 @@ const topic = (name: string) =>
     question: `Is \`item\` about ${name}?`,
   });
 
-// State: { item: { source, jurisdiction, title, date, text } }
 export const REGULATORY_QUESTIONS = {
-  // A Score, not a Noul: a general law that applies to every business is a
-  // different case from a law about waste, and code gives them different weight.
+  // Score, not Noul: general laws get different weight from waste laws.
   wasteFocus: score(
     {
       context: READER,
@@ -71,8 +68,7 @@ export const REGULATORY_QUESTIONS = {
     context: READER,
     question: 'Does `item` invite the public or industry to make a submission or comment?',
   }),
-  // `wasteFocus` rates a rule for all vehicles as general, thus this question
-  // finds the vehicle rules that apply to the fleet of the company.
+  // `wasteFocus` rates all-vehicle rules as general. This finds fleet rules.
   fleetRule: noul(
     {
       context: READER,
@@ -101,8 +97,7 @@ export const REGULATORY_QUESTIONS = {
   topicSafety: topic('workplace health and safety, or fire risk'),
 } as const;
 
-// State: { record: { regulator, jurisdiction, party, action, date, description, location } }
-// The party is always a company. Code drops records for persons before this step.
+// Code drops records for persons before this step.
 export const ENFORCEMENT_QUESTIONS = {
   wasteOperator: noul(
     { question: 'Does `record` show that `record.party` collects, transports, sorts, recycles, treats or disposes of waste as a business?' },

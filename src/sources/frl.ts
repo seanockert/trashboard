@@ -1,18 +1,14 @@
 import type { ResultAsync } from 'neverthrow';
 import { z } from 'zod';
-import { badPageState, changed, parseError, unchanged } from './common';
+import { changed, FIRST_RUN_DAYS, paged, parseError, unchanged } from './common';
 import { daysAgo, newestOf } from './dates';
 import { getJson } from './http';
 import type { FetchOutcome, Source, SourceError } from './types';
 
-// Federal Register of Legislation. New titles (Acts, legislative and
-// notifiable instruments) with the department that administers each one.
 const API = 'https://api.prod.legislation.gov.au/v1/Titles';
 const SITE = 'https://www.legislation.gov.au';
 const PAGE_SIZE = 200;
-// About 3,500 titles each year. A backfill of 12 months needs 18 pages.
 const MAX_PAGES = 30;
-const FIRST_RUN_DAYS = 365;
 
 const COLLECTION_LABELS: Record<string, string> = {
   Act: 'Act',
@@ -33,7 +29,7 @@ type Title = z.infer<typeof Title>;
 
 const Page = z.object({ value: z.array(Title) });
 
-// The API refuses a date with a "Z" suffix.
+// API refuses a "Z" suffix.
 const odataDate = (iso: string) => iso.slice(0, 19);
 
 const pageUrl = ({ since, skip }: { since: string; skip: number }) => {
@@ -83,13 +79,11 @@ export const federalRegister: Source = {
   id: 'frl',
   name: 'Federal Register of Legislation (new titles)',
   kind: 'regulatory',
-  jurisdiction: 'CTH',
   homepage: SITE,
-  run: ({ cursor, now, page, since }) => {
-    if (page === null) {
-      return fetchPage({ since: since ?? cursor ?? daysAgo(now, FIRST_RUN_DAYS), page: 0, newestSoFar: null });
-    }
-    const state = PageState.safeParse(page);
-    return state.success ? fetchPage({ since: state.data.since, page: state.data.page, newestSoFar: state.data.newest }) : badPageState(API);
-  },
+  run: paged({
+    url: API,
+    state: PageState,
+    first: ({ cursor, now, since }) => fetchPage({ since: since ?? cursor ?? daysAgo(now, FIRST_RUN_DAYS), page: 0, newestSoFar: null }),
+    next: (state) => fetchPage({ since: state.since, page: state.page, newestSoFar: state.newest }),
+  }),
 };

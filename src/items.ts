@@ -4,13 +4,11 @@ import type { Summary } from './summary';
 export const Jurisdiction = z.enum(['CTH', 'QLD', 'NSW', 'VIC', 'SA', 'WA', 'TAS', 'NT', 'ACT']);
 export type Jurisdiction = z.infer<typeof Jurisdiction>;
 
-// Triage: an item with no status is new. The user acts on it, then marks it done, or dismisses it.
 export const TriageStatus = z.enum(['acting', 'done', 'dismissed']);
 export type TriageStatus = z.infer<typeof TriageStatus>;
 export type Triage = { status: TriageStatus; note: string };
 
-// The longest source text that goes to Jev and into search. Jev accuracy
-// drops when the state holds much text that does not help the judgment.
+// Jev accuracy drops when state holds much irrelevant text.
 export const BODY_MAX = 4000;
 
 const common = {
@@ -20,11 +18,9 @@ const common = {
   url: z.url({ protocol: /^https?$/ }),
   publishedAt: z.iso.date().nullable(),
   body: z.string().transform((text) => text.slice(0, BODY_MAX)),
-  // A page with the full text. The pipeline fetches it before Jev tags the item.
   detailUrl: z.url({ protocol: /^https?$/ }).nullable().default(null),
 };
 
-// What a source adapter gives back for each record.
 export const NewItem = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('regulatory'), ...common }),
   z.object({
@@ -34,7 +30,6 @@ export const NewItem = z.discriminatedUnion('kind', [
     action: z.string().min(1),
     location: z.string().nullable(),
     penaltyAud: z.number().nullable(),
-    // The source states a waste activity, for example a QLD ERA code for waste disposal.
     wasteActivity: z.boolean().default(false),
   }),
 ]);
@@ -55,14 +50,12 @@ export type StoredItem = {
   partyGroup: string | null;
   action: string | null;
   location: string | null;
-  // The shown penalty: the source amount, else the amount that Jev selected.
   penaltyAud: number | null;
   penaltySourceAud: number | null;
   contentHash: string;
   wasteActivity: boolean;
   answers: unknown;
   summary: Summary | null;
-  // Regulatory: dates that the source text states, selected by Jev.
   closesOn: string | null;
   startsOn: string | null;
 };

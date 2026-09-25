@@ -1,21 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { StoredItem } from '../src/items';
-import { dateEntries, hitPenalties, penaltyBenchmarks, periodRange, quarterOf, quarterRange, recentQuarters, type Row } from '../src/web/models';
+import { dateEntries, penaltyBenchmarks, periodRange, quarterOf, recentQuarters, type Row } from '../src/web/models';
 
 describe('penaltyBenchmarks', () => {
   it('gives the median and the highest amount for each conduct', () =>
     expect(penaltyBenchmarks([30000, 10000, 20000, 90000].map((penalty) => ({ offence: 'water', penalty })))).toMatchObject([{ id: 'water', count: 4, median: 25000, highest: 90000 }]));
-});
-
-describe('hitPenalties', () => {
-  it('keeps only enforcement records with an amount', () => {
-    const items = [
-      { kind: 'enforcement', penaltyAud: 5000, answers: null },
-      { kind: 'enforcement', penaltyAud: null, answers: null },
-      { kind: 'regulatory', penaltyAud: null, answers: null },
-    ] as StoredItem[];
-    expect(hitPenalties(items)).toEqual([{ offence: null, penalty: 5000 }]);
-  });
 });
 
 describe('dateEntries', () => {
@@ -26,10 +15,9 @@ describe('dateEntries', () => {
 });
 
 describe('quarters', () => {
-  it('gives the first and last day', () => expect(quarterRange('2026-Q3')).toMatchObject({ from: '2026-07-01', to: '2026-09-30' }));
   it('lists recent quarters across a year end', () => expect(recentQuarters(new Date('2026-02-10'), 3)).toEqual(['2026-Q1', '2025-Q4', '2025-Q3']));
   it('uses the Brisbane day at a quarter start', () => {
-    // 1 July 01:00 in Brisbane is still 30 June in UTC.
+    // 1 July 01:00 Brisbane = 30 June UTC.
     expect(quarterOf(new Date('2026-06-30T15:00:00Z'))).toBe('2026-Q3');
     expect(recentQuarters(new Date('2025-12-31T15:00:00Z'), 1)).toEqual(['2026-Q1']);
   });

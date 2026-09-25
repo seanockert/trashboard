@@ -4,28 +4,25 @@ import type { StoredItem } from './items';
 import { USD_PER_MILLION_INPUT_TOKENS } from './jev/tag';
 
 const SHORTLIST = 30;
-export const RESULT_MIN = 0.3;
+const RESULT_MIN = 0.3;
 const WORDS_MAX = 12;
 const EXCERPT = 700;
 
-// FTS5 treats some characters as syntax. Each word becomes a quoted term,
-// and any term can match. BM25 then ranks the rows that match more terms higher.
-export const ftsQuery = (text: string) =>
+// FTS5 syntax characters: quote each word.
+const words = (text: string) =>
   text
     .toLowerCase()
     .split(/[^\p{L}\p{N}]+/u)
     .filter((word) => word.length > 1)
-    .slice(0, WORDS_MAX)
+    .slice(0, WORDS_MAX);
+
+const ftsQuery = (text: string) =>
+  words(text)
     .map((word) => `"${word}"`)
     .join(' OR ');
 
-// A filter needs each word, thus the terms have no OR. Each term is a prefix, thus "stock" also finds "stockpile".
 export const ftsFilter = (text: string) =>
-  text
-    .toLowerCase()
-    .split(/[^\p{L}\p{N}]+/u)
-    .filter((word) => word.length > 1)
-    .slice(0, WORDS_MAX)
+  words(text)
     .map((word) => `"${word}"*`)
     .join(' ');
 
@@ -40,12 +37,11 @@ const helpsAnswer = noul(
   },
 );
 
-export type SearchHit = { item: StoredItem; score: number; bm25Rank: number };
+type SearchHit = { item: StoredItem; score: number; bm25Rank: number };
 
 export type SearchResult = { hits: SearchHit[]; shortlist: number; inputTokens: number; costUsd: number; ms: number };
 
-// One request for each candidate. The requests are independent, thus one
-// candidate never changes the score of another.
+// One request per candidate, thus scores stay independent.
 export const search =
   ({ db, client }: { db: D1Database; client: TypeSafeClient }) =>
   async (query: string): Promise<SearchResult> => {

@@ -1,16 +1,6 @@
 import { app } from './web/app';
 import { z } from 'zod';
-import {
-  handleItemMessage,
-  handleRegroupMessage,
-  handleSummaryMessage,
-  IngestMessage,
-  ingestPage,
-  ItemMessage,
-  RegroupMessage,
-  SummaryMessage,
-  updateAll,
-} from './pipeline';
+import { handleItemQueueMessage, IngestMessage, ingestPage, ItemQueueMessage, updateAll } from './pipeline';
 
 const INGEST_QUEUE = 'trashboard-ingest';
 const ITEM_QUEUE = 'trashboard-items';
@@ -52,18 +42,7 @@ export default {
     await Promise.all(
       batch.messages.map((message) => {
         if (batch.queue === INGEST_QUEUE) return handle({ message, queue: batch.queue, schema: IngestMessage, run: async (body) => void (await ingestPage({ env, ...body })) });
-        if (batch.queue === ITEM_QUEUE)
-          return handle({
-            message,
-            queue: batch.queue,
-            schema: z.union([ItemMessage, SummaryMessage, RegroupMessage]),
-            run: (body) =>
-              'summariseIds' in body
-                ? handleSummaryMessage({ env, message: body })
-                : 'regroupIds' in body
-                  ? handleRegroupMessage({ env, message: body })
-                  : handleItemMessage({ env, message: body }),
-          });
+        if (batch.queue === ITEM_QUEUE) return handle({ message, queue: batch.queue, schema: ItemQueueMessage, run: (body) => handleItemQueueMessage({ env, message: body }) });
         console.error(JSON.stringify({ event: 'unknown_queue', queue: batch.queue }));
         message.ack();
         return Promise.resolve();

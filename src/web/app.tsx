@@ -52,8 +52,7 @@ app.get('/logout', endSession, (c) => c.redirect('/login'));
 
 app.use('*', requireSession);
 
-// One SA EPA page from `scripts/sa-relay.ts`. The script logs in first, thus it has a session cookie.
-// `state` is null for the first page, else the `next` value of the page before it.
+// From scripts/sa-relay.ts. Script logs in first, so it has the session cookie.
 const RelayPage = z.object({ state: SaState.omit({ body: true }).nullable(), body: z.string() });
 
 app.post('/relay/sa', async (c) => {
@@ -64,10 +63,8 @@ app.post('/relay/sa', async (c) => {
   return c.json(await ingestPage({ env: c.env, sourceId: 'sa-jjr-licences', page, since: null, firstPage: state === null, chain: false }));
 });
 
-// The dates from today to `days` from today, in Brisbane.
 const nextDays = (now: Date, days: number) => ({ from: brisbaneDay(now), to: brisbaneDay(addDays(now, days)) });
 
-// The inbox. With "view=report", the same filters as a page to print.
 app.get('/', async (c) => {
   const now = new Date();
   const fields = inboxFields(now);
@@ -115,7 +112,7 @@ app.get('/search', async (c) => {
   return c.html(<SearchPage model={model} filters={filters} fields={fields} />);
 });
 
-// Saves the status of one item. "new" makes it new again. A form with no note keeps the stored note.
+// "new" resets item. No note keeps stored note.
 app.post('/triage', async (c) => {
   const form = z
     .object({ itemId: z.string().min(1).max(500), status: z.union([TriageStatus, z.literal('new')]), note: z.string().max(500).optional(), back: z.string().optional() })
@@ -147,7 +144,6 @@ app.get('/sources', async (c) => {
   return c.html(<SourcesPage rows={rows} pending={pending} />);
 });
 
-// Does the daily run now: new items from each source, then tags and summaries.
 app.post('/sources/update', async (c) => {
   await updateAll(c.env);
   return c.redirect('/sources');

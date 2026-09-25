@@ -7,15 +7,14 @@ import { between, htmlToText } from './html';
 import { getJson, getText } from './http';
 import type { FetchOutcome, Source, SourceError } from './types';
 
-// QLD, NSW and TAS use the same legislation platform, with Atom feeds for
-// each kind of change. The feeds keep about one week of items.
+// Feeds keep ~1 week of items.
 
 type FeedSpec = { id: string; label: string };
 
 const itemsOf = ({ entries, feed, jurisdiction, textUrl }: { entries: AtomEntry[]; feed: FeedSpec; jurisdiction: Jurisdiction; textUrl: ((entry: AtomEntry) => string | null) | null }) =>
   entries.map((entry) => ({
     kind: 'regulatory',
-    // The same law comes again in a later week as a new version, thus the date is part of the ID.
+    // Same law returns later as new version: date is in ID.
     externalId: `${feed.id}:${entry.id}:${entry.updated ?? ''}`,
     jurisdiction,
     title: entry.title,
@@ -25,38 +24,34 @@ const itemsOf = ({ entries, feed, jurisdiction, textUrl }: { entries: AtomEntry[
     detailUrl: textUrl?.(entry) ?? null,
   }));
 
-// A feed can list one law more than one time in a week.
 const firstOfEachId = <T extends { externalId: string }>(records: T[]) => uniqueBy(records, (r) => r.externalId);
 
-// Feeds are read one after another. The NSW server limits fast requests.
+// Sequential: NSW server rate-limits.
 const readFeeds = ({ base, feeds }: { base: string; feeds: FeedSpec[] }) =>
   feeds.reduce<ResultAsync<{ feed: FeedSpec; entries: AtomEntry[] }[], SourceError>>(
     (done, feed) => done.andThen((acc) => getText({ url: `${base}/feed?id=${feed.id}` }).map(({ text }) => [...acc, { feed, entries: readAtom(text) }])),
     ResultAsync.fromSafePromise(Promise.resolve([])),
   );
 
-// A backfill reads the query endpoint behind the browse pages, because the
-// feeds keep only one week. It is not a documented API. Each record becomes
-// the entry that its feed gives, thus the item ID is the same from both.
+// Backfill: undocumented query endpoint. Records map to feed entry shape, so IDs match.
 type Backfill = {
   ds: string;
   printTypes: string[];
   toEntry: (record: DalRecord) => { feed: FeedSpec; entry: AtomEntry };
 };
 
-// TAS cuts a response off at about 32 KB, thus the pages are small.
+// TAS truncates responses at ~32 KB.
 const DAL_PAGE_SIZE = 50;
 
 const Value = z.object({ __value__: z.string() });
 const DalRecord = z.object({ id: Value, title: Value, 'publication.date': z.string(), 'print.type': Value });
 type DalRecord = z.infer<typeof DalRecord>;
-// One record comes as an object, not as a list.
 const DalPage = z.object({
   data: z.union([z.array(DalRecord), DalRecord.transform((record) => [record])]).default([]),
   totalCount: z.object({ __value__: z.number() }),
 });
 
-export const dalExpression = ({ printTypes, since }: { printTypes: string[]; since: string }) =>
+const dalExpression = ({ printTypes, since }: { printTypes: string[]; since: string }) =>
   `PrintType=(${printTypes.map((t) => `"${t}"`).join(' OR ')}) AND PublicationDate>=${since.slice(0, 10).replace(/-/g, '')}000000`;
 
 const dalEntries = ({ json, backfill }: { json: unknown; backfill: Backfill }) => {
@@ -128,9 +123,8 @@ const pcoSource = ({
   id,
   name,
   kind: 'regulatory',
-  jurisdiction,
   homepage: base,
-  ...(textUrl === null ? {} : { extractDetail: extractPcoText }),
+  ...(textUrl === null ? {} : { extractDetail: extractPcoText, prose: true }),
   run: ({ page, since }) => {
     if (since !== null && backfill !== null) {
       return backfillPage({ base, backfill, since, start: z.number().catch(1).parse(page ?? 1), jurisdiction, textUrl });
@@ -139,12 +133,9 @@ const pcoSource = ({
   },
 });
 
-// The law text starts at the fragment view. The table of contents comes before it.
-export const extractPcoText = (html: string) => htmlToText(between({ html, start: /<[^>]+id="fragview"/i, end: /<footer\b|id="footer"/i }));
+const extractPcoText = (html: string) => htmlToText(between({ html, start: /<[^>]+id="fragview"/i, end: /<footer\b|id="footer"/i }));
 
-// "/view/html/asmade/act-2026-021" -> "/view/whole/html/asmade/act-2026-021".
-// Only a new law, as made, has useful text. A reprint of an old Act can be
-// many megabytes, and its text does not show what changed.
+// Only as-made laws: reprints can be many MB and do not show change.
 const wholeView = (entry: AtomEntry) => (entry.link.includes('/view/html/asmade/') ? entry.link.replace('/view/html/', '/view/whole/html/') : null);
 
 const QLD = 'https://www.legislation.qld.gov.au';
@@ -158,7 +149,6 @@ export const qldLegislation = pcoSource({
   base: QLD,
   feeds: [QLD_NEW_LEGISLATION, QLD_NEW_BILLS],
   textUrl: wholeView,
-  // "act.new" is a new Act and "published" is new subordinate legislation, as made.
   backfill: {
     ds: 'OQPC-BrowseDataSource',
     printTypes: ['act.new', 'published', 'bill.first', 'bill.firstnongovintro'],
@@ -179,7 +169,7 @@ export const tasLegislation = pcoSource({
   base: TAS,
   feeds: [TAS_WHATS_NEW],
   textUrl: wholeView,
-  // Here "act.new" and "published" are new and changed versions, as in the feed.
+  // Here "act.new"/"published" include changed versions.
   backfill: {
     ds: 'EnAct-BrowseDataSource',
     printTypes: ['act.new', 'published'],
@@ -187,7 +177,7 @@ export const tasLegislation = pcoSource({
   },
 });
 
-// The NSW site blocks automated requests for the law text, thus Jev sees the title only.
+// NSW blocks law-text fetch: Jev sees title only.
 export const nswLegislation = pcoSource({
   id: 'nsw-legislation',
   name: 'NSW legislation (new in force versions and bills)',
@@ -198,6 +188,5 @@ export const nswLegislation = pcoSource({
     { id: 'newbills', label: 'New bill' },
   ],
   textUrl: null,
-  // The NSW site refuses automated requests to its query endpoint.
   backfill: null,
 });

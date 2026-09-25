@@ -1,8 +1,5 @@
-// Plain text from server-rendered HTML. Block tags become line breaks.
-
 const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', rsquo: '’', lsquo: '‘', ldquo: '“', rdquo: '”', ndash: '-', mdash: '-', hellip: '…' };
 
-// A numeric entity that is not a valid code point stays as it is.
 const fromCodePoint = (point: number, whole: string) => (point <= 0x10ffff ? String.fromCodePoint(point) : whole);
 
 export const decodeEntities = (text: string) =>
@@ -24,10 +21,8 @@ export const htmlToText = (html: string) =>
     .filter((line) => line !== '')
     .join('\n');
 
-// One line of text, for example from a table cell or a link.
 export const inlineText = (html: string) => decodeEntities(html.replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
 
-// The HTML between the first match of `start` and the first match of `end` after it.
 export const between = ({ html, start, end }: { html: string; start: RegExp; end: RegExp }) => {
   const from = html.search(start);
   if (from < 0) return '';
@@ -36,5 +31,4 @@ export const between = ({ html, start, end }: { html: string; start: RegExp; end
   return to < 0 ? rest : rest.slice(0, to);
 };
 
-// The text of the <main> element of a page.
 export const mainText = (html: string) => htmlToText(between({ html, start: /<main[\s>]/i, end: /<\/main>/i }));

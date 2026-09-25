@@ -15,7 +15,6 @@ const toRecord = ([offender = '', incident = '', outcome = '']: string[]) => {
     jurisdiction: 'SA',
     title: `${civil ? 'Civil penalty' : 'Prosecution'}: ${offender}`,
     url: PAGE,
-    // The outcome text starts with the date of the court order or penalty.
     publishedAt: firstDate(outcome),
     body: `Incident: ${incident}\nOutcome: ${outcome}`,
     party: offender,
@@ -36,8 +35,8 @@ export const saProsecutions: Source = {
   id: 'sa-prosecutions',
   name: 'SA EPA completed prosecutions and civil penalties',
   kind: 'enforcement',
-  jurisdiction: 'SA',
   homepage: PAGE,
+  prose: true,
   run: () =>
     getText({ url: PAGE, headers: { 'user-agent': BROWSER_USER_AGENT } })
       .andThen(({ text }) => tryParse(PAGE, () => parseSaPage(text)))

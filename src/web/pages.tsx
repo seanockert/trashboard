@@ -1,6 +1,6 @@
 import type { Child } from 'hono/jsx';
 import type { StoredItem, Triage } from '../items';
-import type { Sort, Tab } from '../db';
+import { SORTS, type Sort, type Tab } from '../db';
 import { PARTY_GROUPS } from '../parties';
 import { FLAG_MIN } from '../rank';
 import type { SearchResult } from '../search';
@@ -10,6 +10,7 @@ import {
   ITEM_TYPE_LABELS,
   OFFENCE_LABELS,
   PAGE_SIZE,
+  PRIORITY_LEVEL_LABELS,
   brisbaneDay,
   shownFilters,
   sortOf,
@@ -19,12 +20,10 @@ import {
   type InboxFields,
   type InboxFilters,
   type PenaltyBenchmark,
-  type PriorityLevel,
   type Row,
 } from './models';
 import { formatOmni, omniSpec } from './omnibar';
 
-// Search results below this Jev score show as "Possible match".
 const STRONG_MATCH = 0.7;
 
 const aud = (n: number) => n.toLocaleString('en-AU', { style: 'currency', currency: 'AUD', maximumFractionDigits: 0 });
@@ -32,28 +31,22 @@ const aud = (n: number) => n.toLocaleString('en-AU', { style: 'currency', curren
 const date = (iso: string | null) =>
   iso === null ? 'No date' : new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 
-// The card date has no year when the year is the current year.
 const cardDate = (iso: string | null) => (iso !== null && iso.slice(0, 4) === today().slice(0, 4) ? date(iso).replace(/ \d{4}$/, '') : date(iso));
 
-// "1 item", "2 items".
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
 
-// A query string with the values that are set.
 const query = (params: Record<string, string | number | undefined>) =>
   `?${new URLSearchParams(Object.entries(params).flatMap(([k, v]) => (v === undefined || v === '' ? [] : [[k, String(v)]])))}`;
 
 const GROUP_LABELS: Record<string, string> = Object.fromEntries(PARTY_GROUPS.map((g) => [g.id, g.label]));
 
-// The inbox URL of these filters, on page 1.
 const inboxHref = (filters: InboxFilters, fields: InboxFields) => `/${query(inboxParams({ ...filters, page: 1 }, fields))}`;
 
-// The URL of the page with these filters, on the current page.
 const hereHref = (filters: InboxFilters, fields: InboxFields) => `/${query(inboxParams(filters, fields))}`;
 
-// One input for filters and free text. The script in /assets/omnibar.js shows the suggestions and applies a picked filter.
-// Without the script, the user can type tokens and press Enter.
-// `hidden` keeps the tab, the view and the sort when the user changes the filters. `children` go beside "Clear all".
-// "Clear all" shows only when there are filters or text to clear. A default filter that the bar shows is not one to clear.
+// Works without script: type tokens, press Enter.
+// `hidden` keeps tab, view, sort on filter change.
+// A default filter that the bar shows is not one to clear.
 const OmniBar = ({
   fields,
   filters,
@@ -87,6 +80,9 @@ const OmniBar = ({
           aria-controls="omni-list"
         />
         <div class="omni-pop" id="omni-list" role="listbox" aria-label="Suggestions" hidden />
+        <svg width="24" height="24" fill="none" class="icon-search">
+          <path fill="currentColor" fill-rule="evenodd" d="M14.4 15.4a6.8 6.8 0 1 1 1-1l5.2 5.1a.7.7 0 1 1-1 1.1zm-8-1.5a5.2 5.2 0 1 1 7.5 0c-2 2-5.4 2-7.4 0" clip-rule="evenodd"></path>
+        </svg>
       </div>
       {Object.entries(hidden).map(([name, value]) => value !== undefined && <input type="hidden" name={name} value={value} />)}
       {(children !== undefined || clearable) && (
@@ -107,7 +103,6 @@ const OmniBar = ({
   );
 };
 
-// A link to the AI search for the free text of the omni-bar.
 const AskAi = ({ text }: { text: string }) =>
   text === '' ? null : (
     <>
@@ -116,41 +111,32 @@ const AskAi = ({ text }: { text: string }) =>
     </>
   );
 
-// The card title is the link to the source page.
 const Title = ({ item }: { item: StoredItem }) => (
   <a class="title" href={item.url} target="_blank" rel="noopener noreferrer">
     {item.kind === 'enforcement' ? (item.party ?? item.title) : item.title}
   </a>
 );
 
-const PRIORITY_LABELS: Record<PriorityLevel, string> = { high: 'High', medium: 'Medium', low: 'Low' };
-
 const PRIORITY_HELP = {
   regulatory: 'Priority combines how much the item is about waste with its effect on operations, and whether it needs action or invites submissions.',
   enforcement: 'Priority combines how serious the conduct is with the risk that it can also happen in your operations.',
 };
 
-// The level and the reasons tell the user why the item is in its place in the list.
-// Low items have no reasons, because the level tells enough.
 const Priority = ({ row }: { row: Row }) => (
   <div class="why" title={`${PRIORITY_HELP[row.kind]} Score: ${Math.round(row.priority * 100)} of 100.`}>
-    <span class={`prio ${row.level}`}>{PRIORITY_LABELS[row.level]}</span>
+    <span class={`prio ${row.level}`}>{PRIORITY_LEVEL_LABELS[row.level]}</span>
     {row.level !== 'low' && row.reasons.length > 0 && <span> · {row.reasons.join(' · ')}</span>}
   </div>
 );
 
-// A tag is a link that applies its filter. The tag of the current filter removes it.
-// `plain` gives a text link, for the topics below the flags.
 const TagLink = ({ href, on, warn = false, plain = false, text }: { href: string; on: boolean; warn?: boolean; plain?: boolean; text: string }) => (
   <a class={`${plain ? 'topic' : 'tag'}${warn ? ' warn' : ''}${on ? ' on' : ''}`} href={href} title={on ? 'Remove this filter' : 'Show only items with this tag'}>
     {text}
   </a>
 );
 
-// The anchor of a card, so that a save returns to the same place on the page.
 const anchor = (item: StoredItem) => `item-${item.id.replace(/[^\w-]/g, '_')}`;
 
-// The AI summary if there is one, else the start of the source text.
 const ItemText = ({ item }: { item: StoredItem }) => {
   if (item.summary !== null)
     return (
@@ -171,7 +157,6 @@ const ItemText = ({ item }: { item: StoredItem }) => {
 
 const today = () => brisbaneDay(new Date());
 
-// The dates that the source states. A date in the past has a past-tense label.
 const DateTags = ({ item }: { item: StoredItem }) => {
   const now = today();
   return (
@@ -203,7 +188,6 @@ const CloseIcon = () => (
   </svg>
 );
 
-// Act on or dismiss a new item with one click.
 const QuickTriage = ({ item, back }: { item: StoredItem; back: string }) => (
   <form class="quick inline-half" method="post" action="/triage">
     <input type="hidden" name="itemId" value={item.id} />
@@ -217,8 +201,6 @@ const QuickTriage = ({ item, back }: { item: StoredItem; back: string }) => (
   </form>
 );
 
-// Add a note while acting, then mark it done.
-// "new" as the status makes the item new again (Drop, Restore).
 const TriageForm = ({ item, triage, back }: { item: StoredItem; triage: Triage; back: string }) => (
   <form class="triage stack-half" method="post" action="/triage">
     <input type="hidden" name="itemId" value={item.id} />
@@ -229,18 +211,20 @@ const TriageForm = ({ item, triage, back }: { item: StoredItem; triage: Triage; 
       </textarea>
     )}
     {(triage.status === 'done' || triage.status === 'dismissed') && triage.note !== '' && <div class="triage-note">{triage.note}</div>}
-    <div class="inline-half inline-wrap">
+    <div class="inline-half inline-between inline-wrap">
       {triage.status === 'acting' && (
         <>
-          <button type="submit" name="status" value="done">
-            Done
-          </button>
           <button type="submit" name="status" value="acting" class="secondary">
             Save note
           </button>
-          <button type="submit" name="status" value="new" class="secondary" title="Back to New. Clears the note.">
-            Drop
-          </button>
+          <div class="inline-half">
+            <button type="submit" name="status" value="new" class="secondary" title="Back to New. Clears the note.">
+              Move back to New
+            </button>
+            <button type="submit" name="status" value="done">
+              Dismiss
+            </button>
+          </div>
         </>
       )}
       {triage.status === 'done' && (
@@ -260,9 +244,6 @@ const TriageForm = ({ item, triage, back }: { item: StoredItem; triage: Triage; 
   </form>
 );
 
-// One card for both kinds of item. The head gives the priority and the facts.
-// The flags below the text tell the user why to look now. The topics are text links to the inbox with that filter.
-// `badge` replaces the priority, for example with the search match.
 const ItemCard = ({ row, filters, fields, back, badge }: { row: Row; filters: InboxFilters; fields: InboxFields; back: string; badge?: Child }) => {
   const { item } = row;
   const { picked } = filters;
@@ -320,7 +301,6 @@ const ItemCard = ({ row, filters, fields, back, badge }: { row: Row; filters: In
   );
 };
 
-// Links to the pages before and after, with the same filters.
 const Pager = ({ filters, fields, matched }: { filters: InboxFilters; fields: InboxFields; matched: number }) => {
   const pages = Math.max(1, Math.ceil(matched / PAGE_SIZE));
   if (pages === 1) return null;
@@ -339,7 +319,7 @@ const Pager = ({ filters, fields, matched }: { filters: InboxFilters; fields: In
 export const LoginPage = ({ next, error }: { next: string; error: string | null }) => (
   <Layout title="Log in" path={null}>
     <form class="login stack" method="post" action="/login">
-      <h1 class="inline"><img src="/assets/trashboard-icon-sm.png" height="48" width="48" alt="" /> Trashboard</h1>
+      <h1 class="inline"><img src="/assets/trashboard-icon-sm.png" height="48" width="48" alt="" />Trashboard</h1>
       <div class="note">Tip pass, please.</div>
       {error !== null && <div class="error">{error}</div>}
       <input type="hidden" name="next" value={next} />
@@ -376,7 +356,7 @@ const DateTable = ({ entries }: { entries: DateEntry[] }) => (
             </td>
             <td>{entry.row.item.jurisdiction}</td>
             <td>
-              <div class={`prio ${entry.row.level}`}>{PRIORITY_LABELS[entry.row.level]}</div>
+              <div class={`prio ${entry.row.level}`}>{PRIORITY_LEVEL_LABELS[entry.row.level]}</div>
             </td>
           </tr>
         ))}
@@ -387,14 +367,12 @@ const DateTable = ({ entries }: { entries: DateEntry[] }) => (
 
 const shortDate = (iso: string) => new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', timeZone: 'UTC' });
 
-// "Today", "Tomorrow", "In 5 days".
 const daysFrom = (from: string, to: string) => {
   const days = Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000);
   return days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : `In ${days} days`;
 };
 
-// The coming dates of the inbox, beside the list on a wide screen, and folded above it on a narrow screen.
-// Most dates are submission close dates, thus only a start date has a label.
+// Most dates are close dates, so only a start date has a label.
 const DueList = ({ entries }: { entries: DateEntry[] }) => {
   const now = today();
   return (
@@ -414,7 +392,7 @@ const DueList = ({ entries }: { entries: DateEntry[] }) => {
               <Title item={entry.row.item} />
               <div class="note inline-half inline-wrap">
                 <div class={`prio ${entry.row.level}`} title="Priority">
-                  {PRIORITY_LABELS[entry.row.level]}
+                  {PRIORITY_LEVEL_LABELS[entry.row.level]}
                 </div>
                 <div>{entry.row.item.jurisdiction}</div>
                 {entry.type === 'starts' && <div>Starts to apply</div>}
@@ -432,10 +410,9 @@ const TAB_LABELS: Record<Tab, string> = { new: 'New', acting: 'Acting', done: 'D
 
 const SORT_LABELS: Record<Sort, string> = { priority: 'Priority', newest: 'Newest', oldest: 'Oldest', triaged: 'Last touched' };
 
-// New items have no triage date, thus "Last touched" is not an option for them.
 const SortSelect = ({ filters, fields }: { filters: InboxFilters; fields: InboxFields }) => {
   const { page: _, ...params } = inboxParams({ ...filters, sort: undefined }, fields);
-  const sorts = (['priority', 'newest', 'oldest', 'triaged'] as const).filter((s) => s !== 'triaged' || filters.tab !== 'new');
+  const sorts = SORTS.filter((s) => s !== 'triaged' || filters.tab !== 'new');
   return (
     <form class="sort" method="get" action="/">
       {Object.entries(params).map(([name, value]) => value !== undefined && value !== '' && <input type="hidden" name={name} value={String(value)} />)}
@@ -461,7 +438,7 @@ const EMPTY_TEXT: Record<Tab, string> = {
 
 export const DUE_DAYS = 30;
 
-export type InboxModel = { rows: Row[]; counts: Record<Tab, number>; due: DateEntry[]; reportQuarter: string };
+type InboxModel = { rows: Row[]; counts: Record<Tab, number>; due: DateEntry[]; reportQuarter: string };
 
 export const InboxPage = ({ model, filters, fields }: { model: InboxModel; filters: InboxFilters; fields: InboxFields }) => {
   const report = { ...filters, view: 'report' as const, picked: { ...filters.picked, period: filters.picked.period ?? model.reportQuarter } };
@@ -500,7 +477,6 @@ export const InboxPage = ({ model, filters, fields }: { model: InboxModel; filte
 
 type GroupRow = ReturnType<typeof groupTable>[number];
 
-// Enforcement counts for each company group.
 const GroupTable = ({ rows }: { rows: GroupRow[] }) => (
   <div class="scroll">
     <table>
@@ -533,7 +509,7 @@ const Stat = ({ value, text }: { value: number; text: string }) => (
   </div>
 );
 
-export type ReportModel = {
+type ReportModel = {
   label: string;
   counts: { high: number; action: number; submissions: number };
   top: Row[];
@@ -544,9 +520,8 @@ export type ReportModel = {
 
 export const REPORT_DATE_DAYS = 90;
 
-// A short line for each item in the report.
 const ReportItem = ({ row }: { row: Row }) => (
-  <li>
+  <li class="report-item">
     <Title item={row.item} />
     <div class="note">
       {row.item.jurisdiction} · {date(row.item.publishedAt)} · {row.kind === 'regulatory' ? ITEM_TYPE_LABELS[row.answers.itemType.choice] : row.item.action}
@@ -558,7 +533,6 @@ const ReportItem = ({ row }: { row: Row }) => (
   </li>
 );
 
-// The inbox filters on one page, to print or save as PDF. Dismissed items are not in it.
 export const ReportView = ({ model, filters, fields }: { model: ReportModel; filters: InboxFilters; fields: InboxFields }) => {
   const jjr = model.groups.find((g) => g.id === 'jjr');
   const others = formatOmni(fields, { ...filters, picked: { ...filters.picked, period: undefined } });
@@ -566,21 +540,19 @@ export const ReportView = ({ model, filters, fields }: { model: ReportModel; fil
     <Layout title={`Report ${model.label}`} path="/">
       <div class="no-print stack-half">
         <OmniBar fields={fields} filters={filters} hidden={{ view: 'report' }}>
-          <a class="note" href={hereHref({ ...filters, view: undefined, page: 1 }, fields)}>
-            Back to inbox
-          </a>
         </OmniBar>
-        <div class="inline">
-          <button type="button" onclick="window.print()">
-            Print or save as PDF
-          </button>
-        </div>
       </div>
       <h1>Regulatory and enforcement summary</h1>
       <p class="sub">
         {model.label}
         {others !== '' && ` · ${others}`}. From public Australian sources. Check each source before you act.
       </p>
+
+      <div class="inline">
+        <button type="button" onclick="window.print()">
+          Print or save as PDF
+        </button>
+      </div>
 
       <div class="stats">
         <Stat value={model.counts.high} text="High priority changes" />
@@ -621,7 +593,6 @@ export const ReportView = ({ model, filters, fields }: { model: ReportModel; fil
   );
 };
 
-// A median of fewer penalties than this is not a useful benchmark.
 const BENCHMARK_MIN = 3;
 
 const PenaltyTable = ({ rows }: { rows: PenaltyBenchmark[] }) =>
@@ -662,13 +633,14 @@ const SearchBox = ({ query }: { query: string }) => (
   </form>
 );
 
-export type SearchModel = { query: string; result: SearchResult | null; rows: Row[]; scores: ReadonlyMap<string, number>; penalties: PenaltyBenchmark[] };
+type SearchModel = { query: string; result: SearchResult | null; rows: Row[]; scores: ReadonlyMap<string, number>; penalties: PenaltyBenchmark[] };
 
-// Search reads all stored items, also the ones the inbox hides.
+// Search reads all items, also the ones the inbox hides.
 export const SearchPage = ({ model, filters, fields }: { model: SearchModel; filters: InboxFilters; fields: InboxFields }) => {
   const back = `/search?${new URLSearchParams({ q: model.query })}`;
   return (
     <Layout title={model.query === '' ? 'Search' : `Search: ${model.query}`} path="/search">
+      <h1>Search</h1>
       <SearchBox query={model.query} />
       {model.result === null ? (
         <p class="note">
@@ -710,7 +682,7 @@ export const SearchPage = ({ model, filters, fields }: { model: SearchModel; fil
   );
 };
 
-export type SourceRow = {
+type SourceRow = {
   id: string;
   name: string;
   homepage: string;

@@ -5,13 +5,12 @@ import { readSecrets } from '../env';
 const COOKIE = 'trashboard_session';
 const SESSION_DAYS = 30;
 
-// Only a local path is a safe place to send the user after login. A browser reads "/\" as "//", which is another site.
+// Only local paths. A browser reads "/\" as "//" (other site).
 export const safeNext = (next: unknown) => (typeof next === 'string' && /^\/(?![/\\])/.test(next) ? next : '/');
 
 const encoder = new TextEncoder();
 
-// Compares the digests, not the strings, so the time taken does not depend on
-// how much of the password is correct.
+// Compare digests: time does not depend on match length.
 const sameSecret = async ({ given, expected }: { given: string; expected: string }): Promise<boolean> => {
   const [a, b] = await Promise.all(
     [given, expected].map((text) => crypto.subtle.digest('SHA-256', encoder.encode(text))),
@@ -42,7 +41,7 @@ export const requireSession: MiddlewareHandler<{ Bindings: Env }> = async (c, ne
   const value = await getSignedCookie(c, readSecrets(c.env).SESSION_SECRET, COOKIE);
   const expires = typeof value === 'string' ? Number(value) : Number.NaN;
   if (!Number.isFinite(expires) || expires < Date.now()) {
-    // A form post cannot repeat after login, thus it goes to the default page.
+    // Form post cannot repeat after login. Go to default page.
     const next = c.req.method === 'GET' ? `${c.req.path}${new URL(c.req.url).search}` : '/';
     return c.redirect(`/login?next=${encodeURIComponent(next)}`);
   }

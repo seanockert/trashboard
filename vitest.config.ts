@@ -1,4 +1,4 @@
 import { defineConfig } from 'vitest/config';
 
-// The tests cover pure functions, thus they run in Node, not in the Workers runtime.
+// Node, not Workers runtime. D1 tests use node:sqlite (test/d1.ts).
 export default defineConfig({ test: { include: ['test/**/*.test.ts'] } });

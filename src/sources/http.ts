@@ -3,7 +3,7 @@ import type { SourceError } from './types';
 
 const USER_AGENT = 'Trashboard/0.1 (private research tool; one request per source per day)';
 
-// Some sites behind CloudFront refuse a request without a browser user agent.
+// CloudFront sites refuse requests without a browser user agent.
 export const BROWSER_USER_AGENT = 'Mozilla/5.0 (compatible; Trashboard/0.1)';
 
 type Headers = Record<string, string>;

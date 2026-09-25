@@ -1,18 +1,15 @@
 import type { ResultAsync } from 'neverthrow';
 import { z } from 'zod';
-import { badPageState, changed, newestFirstPage, parseError, unchanged } from './common';
+import { changed, newestFirstPage, paged, parseError, unchanged } from './common';
 import { htmlToText } from './html';
 import { getJson } from './http';
 import type { FetchOutcome, Source, SourceError } from './types';
 
-// The search API behind the WorkSafe Victoria prosecution result summaries.
-// It is not a documented API. It gives the newest outcomes first.
+// Undocumented search API, newest first.
 const API = 'https://content-v2.api.worksafe.vic.gov.au/api/v2/search-record';
 const SITE = 'https://www.worksafe.vic.gov.au';
 const REGISTER_PAGE = `${SITE}/prosecution-result-summaries-enforceable-undertakings`;
-// A record is about 16 KB of JSON, thus a page of 20 is about 320 KB.
 const PAGE_ROWS = 20;
-// A first run reads the full register, about 1,900 outcomes in 2026.
 const MAX_PAGES = 200;
 
 const PrsRecord = z.object({
@@ -38,7 +35,7 @@ export const toRecord = (r: PrsRecord) => {
     url: `${SITE}/record/${r.record_id}`,
     publishedAt: isoDay(r.record_prs_dateoutcome),
     body: htmlToText(r.record_outcome ?? ''),
-    // A suppressed name is a court number, for example "SC36 of 2026". The company filter drops it.
+    // Suppressed name is a court number (e.g. "SC36 of 2026"); company filter drops it.
     party: r.record_title.trim(),
     action,
     location: null,
@@ -46,7 +43,6 @@ export const toRecord = (r: PrsRecord) => {
   };
 };
 
-// One API page for each invocation.
 const REREAD_DAYS = 90;
 const PageState = z.object({ page: z.number(), newest: z.string().nullable() });
 
@@ -76,11 +72,12 @@ export const worksafeVic: Source = {
   id: 'worksafe-vic',
   name: 'WorkSafe Victoria prosecution result summaries',
   kind: 'enforcement',
-  jurisdiction: 'VIC',
   homepage: REGISTER_PAGE,
-  run: ({ cursor, page }) => {
-    if (page === null) return fetchPage({ page: 0, cursor, newestSoFar: null });
-    const state = PageState.safeParse(page);
-    return state.success ? fetchPage({ page: state.data.page, cursor, newestSoFar: state.data.newest }) : badPageState(API);
-  },
+  prose: true,
+  run: paged({
+    url: API,
+    state: PageState,
+    first: ({ cursor }) => fetchPage({ page: 0, cursor, newestSoFar: null }),
+    next: (state, { cursor }) => fetchPage({ page: state.page, cursor, newestSoFar: state.newest }),
+  }),
 };

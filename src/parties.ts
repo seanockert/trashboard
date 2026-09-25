@@ -1,5 +1,4 @@
-// Known company groups and the names that their entities use in public
-// registers. Code matches names, thus a group is never a model guess.
+// Code matches names, thus a group is never a model guess.
 export const PARTY_GROUPS = [
   { id: 'jjr', label: 'JJ Richards', pattern: /\bj\.?\s?j\.?\s?richards\b|\bjj'?s waste\b|\bsouthern oil collections\b|\bcreatenergy\b|\bhandybin\b/i },
   { id: 'cleanaway', label: 'Cleanaway', pattern: /\bcleanaway\b|\btoxfree\b|\btransPacific\b|\bcitywide waste\b|\bcontract resources\b/i },
@@ -15,25 +14,21 @@ export const PARTY_GROUPS = [
   { id: 'enviropacific', label: 'Enviropacific', pattern: /\benviropacific\b/i },
 ] as const;
 
-export type PartyGroupId = (typeof PARTY_GROUPS)[number]['id'];
+type PartyGroupId = (typeof PARTY_GROUPS)[number]['id'];
 
 export const findPartyGroup = (name: string): PartyGroupId | null =>
   PARTY_GROUPS.find((group) => group.pattern.test(name))?.id ?? null;
 
-// Words that show a legal entity that is not a natural person. A record
-// without one of these can name a person, thus code drops it before storage.
-// Trading words such as "Services" are not on the list, because a sole trader
-// can use them. An ABN is not on the list for the same reason. An ACN is.
+// Privacy: no entity word means maybe a person, thus drop before storage.
+// "Services" and ABN not on list: sole traders use them.
 const COMPANY_MARKER =
   /\b(pty|proprietary|ltd|limited|inc|incorporated|corporation|co-?operative|council|shire|authority|department|university|gmbh|plc|llc|nl)\b|\bACN\s*\d/i;
 
-// Text in brackets does not count, because "John Smith (Director, Example
-// Pty Ltd)" names a person. Brackets that hold an ACN do count.
+// Brackets do not count ("John Smith (Director, X Pty Ltd)"), except brackets with an ACN.
 const withoutBrackets = (name: string) => name.replace(/\((?!\s*ACN)[^)]*\)/gi, ' ');
 
 const NAMES_A_PERSON = /\b(director|officer|manager|trustee for)\b/i;
 
-// Words before the company marker, for example 2 in "Port Adelaide Pty Ltd".
 const wordsBeforeMarker = (part: string) => {
   const at = part.search(COMPANY_MARKER);
   return at < 0 ? 0 : part.slice(0, at).trim().split(/\s+/).filter((w) => w !== '').length;
@@ -41,13 +36,7 @@ const wordsBeforeMarker = (part: string) => {
 
 const wordCount = (text: string) => text.trim().split(/\s+/).filter((w) => w !== '').length;
 
-// "&" joins two parties when the text after it is not a company ("Example Pty
-// Ltd & John Smith"), or when a name of two or more words comes before a full
-// company name ("John Smith & Example Salvage Pty Ltd"). Otherwise it is part
-// of one name: "J.J. Richards & Sons Pty Ltd", "Fuller & Gordon Metal Recycling
-// Pty Ltd". This is a rule of thumb. When it is wrong, it drops a company, not
-// keeps a person.
-// Text before "&" that cannot be the name of a person: trade words, or initials only ("R W", "MJ, SE").
+// Rule of thumb for "&". When wrong, it drops a company, never keeps a person.
 const TRADE_WORD = /\b(auto|car|removal|wreckers?|demolition|asbestos|steel|metal|recycling|waste|salvage|hides|transport|investments|holdings|educational|centre|services|industries)\b/i;
 const INITIALS_ONLY = /^([A-Z]{1,2}\.?[\s,]*)+$/;
 const canBePerson = (text: string) => wordCount(text) >= 2 && !TRADE_WORD.test(text) && !INITIALS_ONLY.test(text.trim());
@@ -60,8 +49,10 @@ const splitAmpersand = (part: string): string[] => {
   return twoParties ? [before, ...splitAmpersand(after)] : [part];
 };
 
-// A record can name a company and a person together, for example
-// "Example Pty Ltd and John Smith". Each named party must be a company.
+// Increase when isCompanyName is stricter. Sources then purge failing records one time.
+export const COMPANY_RULE_VERSION = 1;
+
+// Each named party must be a company.
 export const isCompanyName = (name: string): boolean =>
   !NAMES_A_PERSON.test(name) &&
   withoutBrackets(name)
@@ -71,21 +62,16 @@ export const isCompanyName = (name: string): boolean =>
     .filter((part) => part !== '')
     .every((part) => COMPANY_MARKER.test(part));
 
-// Increase this when a pattern changes. Items with an older version get their group again.
+// Increase on pattern change. Older items get their group again.
 export const PARTIES_VERSION = 1;
 
 export const JJR = PARTY_GROUPS[0];
 
-// Aliases that are also common words in titles, for example "Time to rethink packaging".
 const COMMON_WORD_ALIASES = /\brethink\b/gi;
 
-// The group that a regulatory item names. A competitor counts only in the
-// title, because a body can name a company in passing, and some aliases are
-// common words. JJ Richards counts in the body too, and first, thus the user
-// sees every item about the company.
+// Competitors match title only (passing mentions, common-word aliases). JJ Richards matches body too, first.
 export const mentionedGroup = ({ title, body }: { title: string; body: string }): PartyGroupId | null =>
   JJR.pattern.test(`${title}\n${body}`) ? JJR.id : findPartyGroup(title.replace(COMMON_WORD_ALIASES, ' '));
 
-// The group of an item. An enforcement record has the group of its party.
 export const groupOf = (item: { kind: 'regulatory' | 'enforcement'; party: string | null; title: string; body: string }): PartyGroupId | null =>
   item.kind === 'enforcement' ? (item.party === null ? null : findPartyGroup(item.party)) : mentionedGroup(item);

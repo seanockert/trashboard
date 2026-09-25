@@ -1,5 +1,4 @@
-// Deletes every table in the remote database, then applies the migrations
-// again. Use it only before launch, because it deletes all data.
+// Drops all remote tables, reapplies migrations. Deletes all data: pre-launch only.
 import { execFileSync } from 'node:child_process';
 
 const DB = 'trashboard';
@@ -10,7 +9,7 @@ const [{ results: tables }] = JSON.parse(
   wrangler(['d1', 'execute', DB, '--remote', '--json', '--command', "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'"]),
 );
 
-// A virtual table drops its own shadow tables, for example items_fts_data.
+// Virtual table drops own shadow tables (e.g. items_fts_data).
 const virtual = tables.filter((t) => /^CREATE VIRTUAL TABLE/i.test(t.sql ?? ''));
 const isShadow = (name) => virtual.some((v) => name.startsWith(`${v.name}_`));
 const drops = [...virtual, ...tables.filter((t) => !virtual.includes(t) && !isShadow(t.name))];

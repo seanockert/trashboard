@@ -29,7 +29,7 @@ Workers AI writes a short summary for each card that the views show by default.
 | Report: the inbox filters on one page, to print or save as PDF | Done |
 | Penalty benchmarks by conduct, for the enforcement records in search results | Done |
 | Card summaries (Workers AI, Llama 3.1 8B) | Done. Not deployed |
-| Unit tests (parsers, paging, company filter, dates, penalty selection, summary checks, filters) | Done, 113 tests |
+| Tests (parsers, paging, company filter, dates, penalty selection, summary checks, filters, D1 queries, ingest and retry) | Done, 119 tests |
 | Fit the Workers Free plan (10 ms CPU, 50 subrequests for each invocation) | Done locally. Check real CPU time after deploy |
 | Deploy to Cloudflare (`trashboard.seanockert.workers.dev`) | Not started |
 | Labelled test set (about 100 items) to measure tag accuracy | Not started. Needs labels from the user |

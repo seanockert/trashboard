@@ -1,10 +1,4 @@
-/*
-  Rules:
-  - Use flex and grid for layout. Use the inline and stack classes to align items.
-  - Use rem for sizes. Borders and outlines use px.
-  - Use HSL for colours. Use the colour tokens below.
-  - Do not use margin. Use gap and padding.
-*/
+/* Rules: flex/grid, inline/stack classes. rem sizes, px borders. HSL tokens. No margin: use gap/padding. */
 
 :root {
   --color-bg: light-dark(hsl(60, 11%, 96%), hsl(150, 5%, 8%));
@@ -22,13 +16,13 @@
   --color-shadow: light-dark(hsl(0, 0%, 0%, 0.1), hsl(0, 0%, 0%, 0.5));
   --color-backdrop: hsl(0, 0%, 0%, 0.45);
   --easing-base: cubic-bezier(0.2, 1.75, 0.5, 0.6);
-  --font-stack: "Noto Sans", system-ui, sans-serif;
+  --font-stack: "Fira Sans", system-ui, sans-serif;
   --font-size: clamp(1rem, 3vw, 1.25rem);
   --font-size-small: 0.75rem;
   --font-size-note: 0.875rem;
   --radius: 0.375rem;
   --radius-large: 0.5rem;
-  /* A 1px ring as the border. It blends with the drop shadow, thus the edge is darker at the bottom. */
+  /* 1px ring as border. Blends with shadow: darker bottom edge. */
   --shadow-box: 0 0 0 1px var(--color-edge), 0 1px 3px var(--color-shadow);
   --shadow-float: 0 0 0 1px var(--color-edge), 0 var(--size-half) var(--size-2x) var(--color-shadow);
   --size-base: 0.75rem;
@@ -60,7 +54,7 @@ body {
   min-height: 100dvh;
   display: grid;
   grid-template-rows: auto 1fr auto;
-  /* minmax(0, …) stops wide content (tables) from widening the page. */
+  /* minmax(0, …) stops tables from widening page. */
   grid-template-columns: minmax(0, 1fr);
   padding-top: env(safe-area-inset-top);
   text-wrap: pretty;
@@ -91,6 +85,7 @@ button {
   color: inherit;
   cursor: pointer;
   display: flex;
+  font-weight: 600;
   align-items: center;
   justify-content: center;
   transition: transform 0.6s var(--easing-base), color 0.1s ease-out;
@@ -138,13 +133,12 @@ button:not(:disabled):active {
   transform: scale(0.97, 1.04);
 }
 
-/* "all: unset" removes the browser focus ring. */
+/* "all: unset" removes focus ring. */
 button:focus-visible {
   outline: 2px solid var(--color-brand);
   outline-offset: 2px;
 }
 
-/* Inline and Stack layout */
 [class^='inline'],
 [class*=' inline'],
 [class^='stack'],
@@ -213,7 +207,6 @@ ul[class] {
   align-self: flex-start;
 }
 
-/* Elements */
 a {
   color: var(--color-brand);
 }
@@ -297,8 +290,9 @@ dialog {
   translate: -50% -50%;
   max-width: 30rem;
   border: 0;
-  padding: var(--size-2x);
+  padding: var(--size-base);
   color: var(--color-text);
+  width: 98%;
 
   h2 {
     font-size: 1.25rem;
@@ -315,7 +309,6 @@ dialog .actions {
   padding-top: var(--size-base);
 }
 
-/* Boxes. The .scroll box holds a table. */
 .card, .login, .stat, .empty, .scroll, .due {
   background: var(--color-panel);
   border-radius: var(--radius-large);
@@ -328,7 +321,6 @@ dialog, .menu .items {
   box-shadow: var(--shadow-float);
 }
 
-/* Top bar */
 .top {
   padding: var(--size-half) var(--size-base);
   border-bottom: 1px solid var(--color-border);
@@ -399,6 +391,7 @@ dialog, .menu .items {
     background: none;
     color: var(--color-text);
     font-size: var(--font-size-note);
+    font-weight: inherit;
     line-height: 1.5;
   }
 
@@ -407,7 +400,6 @@ dialog, .menu .items {
   }
 }
 
-/* Page */
 .page {
   grid-row: 2;
   width: 100%;
@@ -458,7 +450,7 @@ dialog, .menu .items {
 
 
 
-/* Omni-bar. The input text is transparent. The mirror behind it shows the same text, with the tokens in colour. */
+/* Input text is transparent. Mirror behind shows same text, tokens in colour. */
 .omni-box {
   position: relative;
 
@@ -497,6 +489,17 @@ dialog, .menu .items {
     color: var(--color-text);
     pointer-events: none;
   }
+
+  .icon-search {
+    position: absolute;
+    right: 0.6rem;
+    top: 0.6rem;
+    opacity: 0.6;
+  }
+
+  &:focus-within .icon-search {
+    opacity: 1;
+  }
 }
 
 .omni .k {
@@ -507,7 +510,7 @@ dialog, .menu .items {
   color: var(--color-brand);
 }
 
-/* Bold only in the list. Bold in the mirror makes the text wider than the input text, thus the caret is in the wrong place. */
+/* No bold in mirror: wider text puts caret in wrong place. */
 .omni-pop .v {
   font-weight: 600;
 }
@@ -582,7 +585,6 @@ dialog, .menu .items {
   }
 }
 
-/* Cards */
 .card {
   position: relative;
   padding: var(--size-base);
@@ -620,7 +622,6 @@ dialog, .menu .items {
   }
 }
 
-/* The priority and the facts on the left, the triage buttons on the right. */
 .card-head {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -633,7 +634,6 @@ dialog, .menu .items {
   color: var(--color-muted);
 }
 
-/* The priority line is in the text colour, thus it stands out from the facts. */
 .why {
   color: var(--color-text);
 }
@@ -646,7 +646,6 @@ dialog, .menu .items {
   display: none;
 }
 
-/* Topics are text links, thus they do not compete with the flags. */
 .topics {
   --gap: var(--size-quarter) var(--size-base);
   font-size: var(--font-size-small);
@@ -693,7 +692,6 @@ a.tag.on {
   outline: 2px solid currentColor;
 }
 
-/* The priority is a dot and a word. It is not filled, thus it does not look like a button. */
 .prio {
   display: inline-flex;
   align-items: center;
@@ -745,14 +743,12 @@ a.tag.on {
   color: var(--color-warn);
 }
 
-/* Triage. The buttons are at the bottom of the card. */
 .triage {
-  border-top: 1px solid var(--color-border);
   padding-top: var(--size-half);
   font-size: var(--font-size-note);
 
   button {
-    padding: var(--size-quarter) var(--size-base);
+    padding: var(--size-half) var(--size-base);
     font-size: var(--font-size-note);
   }
 
@@ -772,7 +768,6 @@ td .pill {
   font-size: var(--font-size-small);
 }
 
-/* Inbox. On a wide screen the due dates are in a column on the right. On a narrow screen they fold above the list. */
 .inbox {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -862,7 +857,6 @@ td .pill {
     .inbox-list { grid-area: 2 / 1; }
   }
 
-  /* The column is always open. The summary is a plain heading. */
   .due {
     grid-area: 1 / 2 / 3 / 3;
     align-self: start;
@@ -887,7 +881,6 @@ td .pill {
   }
 }
 
-/* Tabs */
 .tabs {
   --gap: var(--size-2x);
   border-bottom: 1px solid var(--color-border);
@@ -921,7 +914,6 @@ td .pill {
   padding-top: var(--size-base);
 }
 
-/* Report */
 .stats {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
@@ -960,11 +952,51 @@ td .pill {
   }
 }
 
-/* While htmx fetches a page. The delay keeps a fast swap from a flash. */
+/* Delay stops flash on fast swap. */
 main {
   transition: opacity 0.2s 0.15s;
 }
 body:has(.htmx-request) main {
   opacity: 0.6;
   cursor: progress;
+}
+
+@page {
+  size: auto;
+  margin: 20mm;
+}
+
+@media print {
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    font-size: 12pt;
+  }
+
+  nav, 
+  footer, 
+  sidebar, 
+  header, 
+  button, 
+  form, 
+  .no-print {
+    display: none !important;
+  }
+
+  h1, h2, h3 {
+    break-after: avoid-page;
+  }
+
+  p, blockquote, figure, tr {
+    break-inside: avoid;
+  }
+
+  a {
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  .report-item a[target="_blank"]::after {
+    content: " \2197";
+  }
 }

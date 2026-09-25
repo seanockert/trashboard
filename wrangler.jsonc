@@ -7,26 +7,22 @@
 		"nodejs_compat"
 	],
 	"workers_dev": true,
-	// Cloudflare makes the DNS record and the certificate. seanockert.com must be a zone on this account.
+	// seanockert.com must be a zone on this account.
 	"routes": [
 		{ "pattern": "trashboard.seanockert.com", "custom_domain": true }
 	],
-	// Static files in public/ are served before the Worker runs.
-	// Example: public/assets/logo.png is at /assets/logo.png.
 	"assets": {
 		"directory": "./public"
 	},
 	"observability": {
 		"enabled": true
 	},
-	// Each source runs once a day. 19:00 UTC is 05:00 in Brisbane, before the
-	// working day starts.
+	// 19:00 UTC = 05:00 Brisbane.
 	"triggers": {
 		"crons": [
 			"0 19 * * *"
 		]
 	},
-	// Workers AI makes the card summaries. See src/summary.ts.
 	"ai": {
 		"binding": "AI"
 	},
@@ -38,8 +34,7 @@
 			"migrations_dir": "migrations"
 		}
 	],
-	// Login attempts from one IP address. The Workers rate limit counts at each
-	// Cloudflare location, thus the limit is approximate.
+	// Per IP. Counted per Cloudflare location, so approximate.
 	"ratelimits": [
 		{
 			"name": "LOGIN_LIMIT",
@@ -62,15 +57,13 @@
 			}
 		],
 		"consumers": [
-			// One message for each invocation. On the Workers Free plan an invocation
-			// has 10 ms of CPU and 50 subrequests.
+			// Free plan: 10 ms CPU, 50 subrequests per invocation.
 			{
 				"queue": "trashboard-ingest",
 				"max_batch_size": 1,
 				"max_retries": 3
 			},
-			// A message holds up to 10 items: 10 Jev requests and up to 10 detail pages.
-			// Two at a time keep the detail page fetches polite to the source sites.
+			// Concurrency 2 keeps detail fetches polite.
 			{
 				"queue": "trashboard-items",
 				"max_batch_size": 1,

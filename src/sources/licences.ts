@@ -1,24 +1,18 @@
 import { okAsync, type ResultAsync } from 'neverthrow';
 import { z } from 'zod';
 import { JJR } from '../parties';
-import { badPageState, changed, lines, newestFirstPage, parseError, text } from './common';
+import { changed, lines, newestFirstPage, paged, parseError, text } from './common';
 import { datesIn } from './dates';
 import { BROWSER_USER_AGENT, getJson, getText } from './http';
 import type { FetchOutcome, Source, SourceError } from './types';
 
-// Changes to the licences and environmental authorities that JJ Richards
-// holds. Each change is a regulatory item. The views show every item that
-// names JJ Richards, thus the user sees each change.
-// A query to the source finds candidates by a broad name match. Code then
-// keeps only the names that the JJ Richards pattern matches.
+// Query matches names broadly; code keeps JJ Richards pattern matches.
 const isJjr = (name: string) => JJR.pattern.test(name);
 
-// QLD: the register of applications for environmental authorities. A new
-// status of an application changes its item, and the item then gets new tags.
 const QLD_API = 'https://www.data.qld.gov.au/api/3/action';
 const QLD_PACKAGE = `${QLD_API}/package_show?id=environmental-authority-applications`;
 const QLD_DATASET = 'https://www.data.qld.gov.au/dataset/environmental-authority-applications';
-// PostgreSQL regular expression. The JavaScript pattern of the group cannot go in the SQL as it is.
+// PostgreSQL regex: JS pattern not valid in SQL.
 const QLD_NAMES = "(j\\.? ?j\\.?''?s? ?richards|jj''s waste|southern oil|createnergy|handybin)";
 
 const QldApplication = z.object({
@@ -36,7 +30,7 @@ const QldApplication = z.object({
 });
 type QldApplication = z.infer<typeof QldApplication>;
 
-export const qldApplicationRecord = (a: QldApplication) => {
+const qldApplicationRecord = (a: QldApplication) => {
   const action = a['Application Action'] === 'Amend' ? 'Amendment application' : 'Application';
   return {
     kind: 'regulatory',
@@ -81,13 +75,11 @@ export const qldLicences: Source = {
   id: 'qld-jjr-authorities',
   name: 'QLD environmental authority applications (JJ Richards)',
   kind: 'regulatory',
-  jurisdiction: 'QLD',
   homepage: QLD_DATASET,
   run: runQld,
 };
 
-// VIC: EPA Victoria operating licences, from the Vicmap open data service.
-// Each amendment date gives a new item, thus the old items keep the history.
+// Each amendment date = new item; old items keep history.
 const VIC_WFS = 'https://opendata.maps.vic.gov.au/geoserver/wfs';
 const VIC_REGISTER = 'https://www.epa.vic.gov.au/public-registers';
 const JJR_ACN = '000805425';
@@ -154,30 +146,23 @@ export const vicLicences: Source = {
   id: 'vic-jjr-licences',
   name: 'EPA Victoria operating licences (JJ Richards)',
   kind: 'regulatory',
-  jurisdiction: 'VIC',
   homepage: VIC_REGISTER,
   run: runVic,
 };
 
-// SA: the EPA public register gives each change to an authorisation, newest
-// first. It has no name filter, thus code reads the recent changes of all
-// holders and keeps JJ Richards. The response is JSONP, not JSON.
-// CloudFront refuses requests from Cloudflare, thus `scripts/sa-relay.ts`
-// fetches the pages on a local computer and sends each body to the worker.
+// No name filter: read all recent changes, keep JJ Richards. JSONP. CloudFront blocks Cloudflare: scripts/sa-relay.ts relays pages.
 const SA_API = 'https://www.publicregister.epa.sa.gov.au/ajax/records/search';
 const SA_REGISTER = 'https://www.publicregister.epa.sa.gov.au/';
 const SA_PAGE_ROWS = 100;
-// About three weeks of changes are on one page. A run with no cursor reads back about 12 months.
 const SA_FIRST_RUN_PAGES = 17;
-// CloudFront also refuses an Accept header that does not include JavaScript.
+// CloudFront refuses Accept without JavaScript.
 const SA_HEADERS = { 'user-agent': BROWSER_USER_AGENT, accept: 'application/json, text/javascript, */*' };
 
 const SaChange = z.object({ id: z.number(), recordNumber: z.string(), version: z.number(), status: text, type: text, mainName: text, updateReason: text, dateImported: text });
 type SaChange = z.infer<typeof SaChange>;
 const SaPage = z.object({ total: z.number(), results: z.array(SaChange) });
 
-// The JSON inside `callback(...)`. Null when the body is not JSONP.
-export const readJsonp = (body: string): unknown => {
+const readJsonp = (body: string): unknown => {
   try {
     return JSON.parse(body.slice(body.indexOf('(') + 1, body.lastIndexOf(')')));
   } catch {
@@ -185,7 +170,7 @@ export const readJsonp = (body: string): unknown => {
   }
 };
 
-export const saChangeRecord = (c: SaChange) => ({
+const saChangeRecord = (c: SaChange) => ({
   kind: 'regulatory',
   externalId: `${c.recordNumber}:${c.version}`,
   jurisdiction: 'SA',
@@ -201,8 +186,7 @@ export const saChangeRecord = (c: SaChange) => ({
   ]),
 });
 
-// The cursor is the newest change date seen. The date is the import date, thus a run needs no re-read.
-// `body` is a page that the relay script fetched. Without it, the worker fetches the page.
+// Date is import date: no reread needed.
 export const SaState = z.object({ page: z.number().int().min(0), newest: z.string().nullable(), body: z.string().optional() });
 
 export const saPageUrl = (page: number) =>
@@ -225,12 +209,12 @@ export const saLicences: Source = {
   id: 'sa-jjr-licences',
   name: 'SA EPA licence changes (JJ Richards)',
   kind: 'regulatory',
-  jurisdiction: 'SA',
   homepage: SA_REGISTER,
-  run: ({ cursor, page }) => {
-    if (page === null) return fetchSa({ page: 0, cursor, newestSoFar: null, relayed: undefined });
-    const state = SaState.safeParse(page);
-    return state.success ? fetchSa({ page: state.data.page, cursor, newestSoFar: state.data.newest, relayed: state.data.body }) : badPageState(SA_API);
-  },
+  run: paged({
+    url: SA_API,
+    state: SaState,
+    first: ({ cursor }) => fetchSa({ page: 0, cursor, newestSoFar: null, relayed: undefined }),
+    next: (state, { cursor }) => fetchSa({ page: state.page, cursor, newestSoFar: state.newest, relayed: state.body }),
+  }),
   manualOnly: true,
 };

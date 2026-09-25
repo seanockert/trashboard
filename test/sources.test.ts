@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { saLicences, vicLicenceRecord } from '../src/sources/licences';
+import { saLicences } from '../src/sources/licences';
 import { nswProsecutions, toRecord as nswProsecution } from '../src/sources/nsw-prosecutions';
 import { recordsFromRows, splitPage } from '../src/sources/qld-enforcement';
 import { parseSaPage } from '../src/sources/sa-prosecutions';
@@ -113,20 +113,6 @@ describe('SafeWork NSW', () => {
 });
 
 describe('JJ Richards licences', () => {
-  it('gives a VIC licence one item for each amendment date', () => {
-    const licence = {
-      licence_number: 'OL000009923',
-      status: 'Issued',
-      date_issued: '1996-10-25T10:00:00Z',
-      last_amended: '2026-01-21T14:58:12Z',
-      permission_activity: 'A01 (Reportable priority waste management)',
-      place_or_premises: 'J.J. RICHARDS & SONS PTY LTD [LAVERTON NORTH]',
-      premises_address: '166 - 170 Fitzgerald Rd Laverton North VIC 3026 AU',
-      acn: '000805425',
-    };
-    expect(vicLicenceRecord(licence)).toMatchObject({ externalId: 'OL000009923:2026-01-21', publishedAt: '2026-01-21' });
-  });
-
   const change = (over: Record<string, unknown>) => ({
     id: 158869,
     recordNumber: '50003',

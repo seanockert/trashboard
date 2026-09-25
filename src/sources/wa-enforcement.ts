@@ -1,4 +1,4 @@
-import { changed, lines, tryParse } from './common';
+import { changed, dollarAmounts, lines, tryParse } from './common';
 import { latestDate } from './dates';
 import { getText } from './http';
 import { slug, withUniqueIds } from './ids';
@@ -7,10 +7,9 @@ import type { Source } from './types';
 
 const PAGE = 'https://www.wa.gov.au/service/environment/business-and-community-assistance/environmental-enforcement';
 
-// The sum of the dollar amounts in a cell, for example "$3750 $11,250".
 const dollarTotal = (text: string) => {
-  const amounts = [...text.matchAll(/\$\s?([\d,]+(?:\.\d{2})?)/g)].map((m) => Number((m[1] ?? '').replace(/,/g, '')));
-  return amounts.length === 0 ? null : amounts.reduce((sum, n) => sum + n, 0);
+  const amounts = dollarAmounts(text);
+  return amounts.length === 0 ? null : amounts.reduce((sum, m) => sum + m.amount, 0);
 };
 
 type Columns = Record<string, string>;
@@ -96,7 +95,7 @@ export const parseWaPage = (html: string) =>
     if (headers.includes('offender')) return prosecutions(rows);
     if (headers.some((h) => h.startsWith('person to whom mpn'))) return penaltyNotices(rows);
     if (headers.includes('notice number')) return notices(rows);
-    // Vegetation conservation notices are about land clearing, not waste.
+    // Vegetation notices are land clearing, not waste.
     return [];
   }));
 
@@ -104,7 +103,6 @@ export const waEnforcement: Source = {
   id: 'wa-enforcement',
   name: 'WA DWER environmental enforcement',
   kind: 'enforcement',
-  jurisdiction: 'WA',
   homepage: PAGE,
   run: () =>
     getText({ url: PAGE })

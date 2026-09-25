@@ -1,13 +1,11 @@
 import type { ResultAsync } from 'neverthrow';
 import { z } from 'zod';
-import { badPageState, changed, newestFirstPage, parseError, unchanged } from './common';
+import { changed, newestFirstPage, paged, parseError, unchanged } from './common';
 import { mainText } from './html';
 import { getJson } from './http';
 import type { FetchOutcome, Source, SourceError } from './types';
 import { sitePath } from './vic-search';
 
-// The JSON API behind the EPA Victoria court proceedings register. It gives
-// 10 records for each page, newest first.
 const API = 'https://www.epa.vic.gov.au/api/public-register/court-proceedings';
 const SITE = 'https://www.epa.vic.gov.au';
 const REGISTER_PAGE = 'https://www.epa.vic.gov.au/public-registers';
@@ -30,7 +28,7 @@ const toItem = (record: CourtRecord) => {
     publishedAt: record.date.slice(0, 10),
     body: '',
     detailUrl: url,
-    // The ACN stays. It shows that the party is a company.
+    // ACN stays: shows party is a company.
     party: record.title,
     action: 'Court proceeding',
     location: record.location,
@@ -38,7 +36,6 @@ const toItem = (record: CourtRecord) => {
   };
 };
 
-// One API page for each invocation.
 const REREAD_DAYS = 90;
 const PageState = z.object({ page: z.number(), newest: z.string().nullable() });
 
@@ -66,12 +63,13 @@ export const vicCourt: Source = {
   id: 'vic-court',
   name: 'EPA Victoria court proceedings register',
   kind: 'enforcement',
-  jurisdiction: 'VIC',
   homepage: REGISTER_PAGE,
   extractDetail: extractVicDetail,
-  run: ({ cursor, page }) => {
-    if (page === null) return fetchPage({ page: 1, cursor, newestSoFar: null });
-    const state = PageState.safeParse(page);
-    return state.success ? fetchPage({ page: state.data.page, cursor, newestSoFar: state.data.newest }) : badPageState(API);
-  },
+  prose: true,
+  run: paged({
+    url: API,
+    state: PageState,
+    first: ({ cursor }) => fetchPage({ page: 1, cursor, newestSoFar: null }),
+    next: (state, { cursor }) => fetchPage({ page: state.page, cursor, newestSoFar: state.newest }),
+  }),
 };

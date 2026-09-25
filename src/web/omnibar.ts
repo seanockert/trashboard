@@ -1,20 +1,17 @@
-// The omni-bar holds filter tokens and free text in one string, for example
-// "period:30d jurisdiction:QLD topic:levy stormwater". The server parses the string,
-// thus a user can type a query and press Enter without the script.
+// Server parses tokens, so Enter works without the script.
 
-export type OmniOption<V> = { token: string; label: string; value: V };
-export type OmniField<V> = { key: string; label: string; options: readonly OmniOption<V>[] };
+type OmniOption<V> = { token: string; label: string; value: V };
+type OmniField<V> = { key: string; label: string; options: readonly OmniOption<V>[] };
 
 export const omniField = <V extends string | number>(key: string, label: string, options: readonly OmniOption<V>[]): OmniField<V> => ({ key, label, options });
 
 type Fields = Record<string, OmniField<string | number>>;
-export type Picked<F extends Fields> = { [P in keyof F]?: F[P]['options'][number]['value'] | undefined };
-export type OmniQuery<F extends Fields> = { picked: Picked<F>; text: string; invalid: string[] };
+type Picked<F extends Fields> = { [P in keyof F]?: F[P]['options'][number]['value'] | undefined };
+type OmniQuery<F extends Fields> = { picked: Picked<F>; text: string; invalid: string[] };
 
 const TOKEN = /^([a-z]+):(.*)$/i;
 
-// A token with a known key and value sets that filter. A later token for the same key wins.
-// A token with an unknown key or value goes into `invalid`, thus the page can tell the user.
+// Later token for same key wins. Unknown key/value goes to `invalid`.
 export const parseOmni = <F extends Fields>(fields: F, q: string): OmniQuery<F> => {
   const picked: Record<string, string | number> = {};
   const text: string[] = [];
@@ -31,11 +28,10 @@ export const parseOmni = <F extends Fields>(fields: F, q: string): OmniQuery<F> 
     if (entry === undefined || option === undefined) invalid.push(word);
     else picked[entry[0]] = option.value;
   }
-  // The keys and values come from `fields`, thus `picked` has the shape of Picked<F>.
+  // Keys/values come from `fields`, so cast is safe.
   return { picked: picked as Picked<F>, text: text.join(' '), invalid };
 };
 
-// The tokens in the order of `fields`, then the invalid tokens, then the free text.
 export const formatOmni = <F extends Fields>(fields: F, { picked, text, invalid }: OmniQuery<F>) =>
   [
     ...Object.entries(fields).flatMap(([prop, field]) => {
@@ -48,6 +44,5 @@ export const formatOmni = <F extends Fields>(fields: F, { picked, text, invalid 
     .filter((part) => part !== '')
     .join(' ');
 
-// The data that the browser script needs for the suggestions.
 export const omniSpec = (fields: Fields) =>
   Object.values(fields).map((field) => ({ key: field.key, label: field.label, options: field.options.map(({ token, label }) => ({ token, label })) }));

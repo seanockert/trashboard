@@ -9,11 +9,9 @@ import { omniField, parseOmni, formatOmni } from './omnibar';
 
 export const PAGE_SIZE = 50;
 
-// Parts of the business and topics are one filter for the user.
-export const TOPIC_KEYS = [...LINES_OF_BUSINESS, ...TOPICS] as const;
-export type TopicKey = (typeof TOPIC_KEYS)[number];
+const TOPIC_KEYS = [...LINES_OF_BUSINESS, ...TOPICS] as const;
+type TopicKey = (typeof TOPIC_KEYS)[number];
 
-// The token is what the user types after "topic:".
 const TOPIC_OPTIONS: Record<TopicKey, { token: string; label: string }> = {
   lobCollection: { token: 'collection', label: 'Collection' },
   lobRecycling: { token: 'recycling', label: 'Recycling and organics' },
@@ -59,7 +57,7 @@ export const OFFENCE_LABELS: Record<string, string> = {
   unknown: 'Not stated',
 };
 
-// The user is in Brisbane. A day in UTC starts at 10:00 there, thus each day on a page is a Brisbane day.
+// User is in Brisbane (UTC+10). Each day is a Brisbane day.
 export const brisbaneDay = (date: Date) => date.toLocaleDateString('en-CA', { timeZone: 'Australia/Brisbane' });
 
 export const addDays = (date: Date, days: number) => new Date(date.getTime() + days * 86_400_000);
@@ -79,8 +77,7 @@ export const quarterRange = (quarter: string) => {
   return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10), label: `${QUARTER_MONTHS[q - 1]} ${year}` };
 };
 
-// The current quarter and the ones before it, newest first.
-// Day 15 of a month is the same month in UTC and in Brisbane.
+// Day 15 is the same month in UTC and Brisbane.
 export const recentQuarters = (now: Date, count: number) => {
   const day = brisbaneDay(now);
   const [year, month] = [Number(day.slice(0, 4)), Number(day.slice(5, 7)) - 1];
@@ -95,15 +92,12 @@ const RECENT_PERIODS = [
   { token: '5y', label: 'Last 5 years', days: 1825 },
 ];
 
-// All items. The day of an item is never empty, thus a range from the first day holds all of them.
 const ALL_TIME = { token: 'all', label: 'All time' };
 
 const QUARTERS_SHOWN = 8;
 
-// New items in this period show in the inbox when the user sets no period.
 export const DEFAULT_PERIOD = '90d';
 
-// The day range and the label of a period token. A quarter token is "2026-Q3".
 export const periodRange = (token: string, now: Date): Period & { label: string } => {
   const recent = RECENT_PERIODS.find((p) => p.token === token);
   if (recent !== undefined) return { from: brisbaneDay(addDays(now, -recent.days)), to: brisbaneDay(now), label: recent.label };
@@ -111,9 +105,8 @@ export const periodRange = (token: string, now: Date): Period & { label: string 
   return quarterRange(token);
 };
 
-const PRIORITY_LEVEL_LABELS: Record<PriorityLevel, string> = { high: 'High', medium: 'Medium', low: 'Low' };
+export const PRIORITY_LEVEL_LABELS: Record<PriorityLevel, string> = { high: 'High', medium: 'Medium', low: 'Low' };
 
-// The fields change each quarter, thus they are made for a date.
 export const inboxFields = (now: Date) => ({
   period: omniField('period', 'Period', [
     ...[...RECENT_PERIODS, ALL_TIME].map(({ token, label }) => ({ token, label, value: token })),
@@ -132,15 +125,12 @@ const optional = <T extends z.ZodType>(schema: T) => z.preprocess((value) => (va
 const InboxParams = z.object({
   q: z.string().catch('').transform((text) => text.slice(0, 300)),
   tab: z.enum(['new', 'acting', 'done']).catch('new'),
-  // The report is the inbox filters on one printable page.
   view: optional(z.literal('report')).catch(undefined),
-  // No sort gives the default of the tab, see sortOf.
   sort: optional(z.enum(SORTS)).catch(undefined),
   page: optional(z.coerce.number().int().min(1).max(1000)).default(1).catch(1),
 });
 
-// In the inbox, the default period on the New tab is the same as no period. Thus the URL does not have it,
-// and it does not go to the other tabs.
+// New tab default period = no period. Keep it out of URL and other tabs.
 export const parseInboxFilters = (params: Record<string, string>, now: Date) => {
   const { q, ...rest } = InboxParams.parse(params);
   const omni = parseOmni(inboxFields(now), q);
@@ -149,11 +139,9 @@ export const parseInboxFilters = (params: Record<string, string>, now: Date) => 
 };
 export type InboxFilters = ReturnType<typeof parseInboxFilters>;
 
-// The filters that the omni-bar shows. The New tab shows its default period.
 export const shownFilters = (f: InboxFilters): InboxFilters =>
   f.tab === 'new' && f.view === undefined && f.picked.period === undefined ? { ...f, picked: { ...f.picked, period: DEFAULT_PERIOD } } : f;
 
-// The URL parameters that give the same filters. The defaults are not in the URL.
 export const inboxParams = (f: InboxFilters, fields: InboxFields) => ({
   q: formatOmni(fields, f),
   tab: f.tab === 'new' ? undefined : f.tab,
@@ -162,13 +150,11 @@ export const inboxParams = (f: InboxFilters, fields: InboxFields) => ({
   page: f.page > 1 ? f.page : undefined,
 });
 
-// The Done tab shows the last triaged first. New items have no triage date.
 export const sortOf = (f: Pick<InboxFilters, 'tab' | 'sort'>): Sort => {
   const sort = f.sort ?? (f.tab === 'done' ? 'triaged' : 'priority');
   return f.tab === 'new' && sort === 'triaged' ? 'priority' : sort;
 };
 
-// The query for D1. `period` is undefined when the user sets none.
 export const scopeOf = (f: InboxFilters, now: Date, version: number): Scope => ({
   version,
   period: f.picked.period === undefined ? undefined : periodRange(f.picked.period, now),
@@ -180,40 +166,35 @@ export const scopeOf = (f: InboxFilters, now: Date, version: number): Scope => (
   match: ftsFilter(f.text),
 });
 
-// Legislation feeds give only a label and the title, for example "Act: <title>".
-// A body with less than this much text beside the title adds nothing to the card.
+// Feeds often give only label + title. Less body text than this adds nothing.
 const SNIPPET_MIN_EXTRA = 40;
 
 export const snippet = (item: StoredItem) =>
   item.body.includes(item.title) && item.body.length - item.title.length < SNIPPET_MIN_EXTRA ? '' : item.body;
 
-export type Tag<K extends string = string> = { key: K; label: string };
-export type { PriorityLevel };
+type Tag<K extends string = string> = { key: K; label: string };
 
 type RowBase = { item: StoredItem; priority: number; level: PriorityLevel; reasons: string[]; triage: Triage | null };
 export type Row = (RowBase & { kind: 'regulatory'; answers: RegulatoryAnswers; topics: Tag<TopicKey>[] }) | (RowBase & { kind: 'enforcement'; answers: EnforcementAnswers });
 
-export const priorityLevel = (priority: number): PriorityLevel =>
+const priorityLevel = (priority: number): PriorityLevel =>
   priority >= PRIORITY_HIGH ? 'high' : priority >= PRIORITY_MEDIUM ? 'medium' : 'low';
 
-// Short text for each level of the Scores in src/jev/questions.ts.
-// Most items are about waste (level 3), thus that level has no text.
+// Level 3 (waste) is most items: no text.
 const FOCUS_REASONS = ['Not waste', 'General rule', 'Environment rule'];
 const IMPACT_REASONS = ['No effect', 'Background', 'Minor admin', 'Compliance change', 'Major cost'];
 const SEVERITY_REASONS = ['Admin', 'Minor breach', 'Harm risk', 'Serious harm'];
 
-// Why an item has its priority, from the Jev answers that make the priority.
-export const priorityReasons = (answers: RegulatoryAnswers): string[] => {
+const priorityReasons = (answers: RegulatoryAnswers): string[] => {
   const focus = Object.entries(answers.wasteFocus.probabilities).toSorted((a, b) => b[1] - a[1])[0]?.[0];
   const focusReason = answers.fleetRule.noul >= FLAG_MIN && Number(focus) < 2 ? 'Fleet rule' : FOCUS_REASONS[Number(focus)];
   return [focusReason, IMPACT_REASONS[Math.round(answers.impact.score)]].filter((text) => text !== undefined);
 };
 
-// The similar-risk flag is a tag on the card, not a reason.
 const enforcementReasons = (answers: EnforcementAnswers): string[] =>
   [SEVERITY_REASONS[Math.round(answers.severity.score)]].filter((text) => text !== undefined);
 
-// Only the rows on the page are parsed. D1 did the filters, the sort and the counts.
+// D1 did filters, sort, counts. Parse only page rows.
 export const toRows = (rows: InboxRow[]): Row[] =>
   rows.flatMap(({ item, priority, triage }): Row[] => {
     const base = { item, priority, triage, level: priorityLevel(priority) };
@@ -242,7 +223,6 @@ const median = (sorted: number[]) => {
   return sorted.length % 2 === 1 ? (sorted[mid] ?? 0) : ((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) / 2;
 };
 
-// The known penalties for each type of conduct, most records first.
 export const penaltyBenchmarks = (rows: { offence: string | null; penalty: number }[]): PenaltyBenchmark[] =>
   Object.entries(Object.groupBy(rows, (r) => r.offence ?? 'unknown'))
     .flatMap(([id, group]) => {
@@ -251,7 +231,6 @@ export const penaltyBenchmarks = (rows: { offence: string | null; penalty: numbe
     })
     .toSorted((a, b) => b.count - a.count || b.highest - a.highest);
 
-// The penalties of the enforcement records in search results.
 export const hitPenalties = (items: StoredItem[]) =>
   items.flatMap((item) => {
     if (item.kind !== 'enforcement' || item.penaltyAud === null) return [];
@@ -261,7 +240,6 @@ export const hitPenalties = (items: StoredItem[]) =>
 
 export type DateEntry = { date: string; type: 'closes' | 'starts'; row: Row };
 
-// One entry for each date in the range. An item with two dates gives two entries.
 export const dateEntries = ({ rows, from, to }: { rows: Row[]; from: string; to: string }): DateEntry[] =>
   rows
     .flatMap((row) => [

@@ -7,7 +7,7 @@ const Secrets = z.object({
   SESSION_SECRET: z.string().min(32),
 });
 
-export type Secrets = z.infer<typeof Secrets>;
+type Secrets = z.infer<typeof Secrets>;
 
 export const readSecrets = (env: unknown): Secrets => {
   const parsed = Secrets.safeParse(env);

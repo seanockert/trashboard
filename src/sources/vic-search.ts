@@ -1,25 +1,22 @@
 import type { ResultAsync } from 'neverthrow';
 import { z } from 'zod';
-import { badPageState, changed, parseError, unchanged } from './common';
+import { changed, FIRST_RUN_DAYS, paged, parseError, unchanged } from './common';
 import { daysAgo, newestOf } from './dates';
 import { htmlToText } from './html';
 import { postJson } from './http';
-import type { FetchOutcome, Source, SourceContext, SourceError } from './types';
+import type { FetchOutcome, Source, SourceError } from './types';
 
-// Victorian government sites run on one platform with an open search proxy.
-// It is not a documented API, thus the schema check here fails loudly if it changes.
+// Undocumented search proxy: schema check fails loudly on change.
 
-const FIRST_RUN_DAYS = 365;
 const SIZE = 200;
 
-// Paths from the search can start with the ID of the site, for example "/site-1523/news/...".
+// Paths can start with site ID, e.g. "/site-1523/news/...".
 export const sitePath = (path: string) => path.replace(/^\/site-\d+/, '');
 
-// Each field comes as a list with one value.
 const first = z.array(z.string()).transform((list) => list[0] ?? '');
 const firstOptional = z.array(z.string()).optional().transform((list) => list?.[0] ?? '');
 
-// The article text often starts with the landing page summary. Keep one copy.
+// Article text often repeats the summary. Keep one copy.
 export const newsBody = (summary: string, text: string) =>
   summary === '' || text.startsWith(summary) ? text : text === '' ? summary : `${summary}\n${text}`;
 
@@ -27,7 +24,7 @@ const Hits = z.object({ hits: z.object({ hits: z.array(z.object({ _source: z.unk
 
 const PageState = z.object({ since: z.string(), from: z.number(), newest: z.string().nullable() });
 
-// Oldest first, thus a new item that arrives during a run goes to the end and does not move a page.
+// Oldest first: new items during a run go to end, pages do not shift.
 const run =
   <T extends z.ZodType, R>({
     url,
@@ -43,10 +40,8 @@ const run =
     filters: unknown[];
     schema: T;
     toItem: (hit: z.infer<T>) => R;
-  }) =>
-  ({ cursor, now, page, since }: SourceContext): ResultAsync<FetchOutcome, SourceError> => {
-    const state = page === null ? { since: since ?? cursor ?? daysAgo(now, FIRST_RUN_DAYS), from: 0, newest: null } : PageState.safeParse(page).data;
-    if (state === undefined) return badPageState(url);
+  }) => {
+  const fetchPage = (state: z.infer<typeof PageState>): ResultAsync<FetchOutcome, SourceError> => {
     const body = {
       size: SIZE,
       from: state.from,
@@ -66,6 +61,13 @@ const run =
       return changed({ records: hits.map(toItem), cursor: newest ?? state.since, next: isLast ? null : { since: state.since, from: state.from + SIZE, newest } });
     });
   };
+  return paged({
+    url,
+    state: PageState,
+    first: ({ cursor, now, since }) => fetchPage({ since: since ?? cursor ?? daysAgo(now, FIRST_RUN_DAYS), from: 0, newest: null }),
+    next: fetchPage,
+  });
+};
 
 const LEGISLATION_URL = 'https://www.legislation.vic.gov.au/api/tide/elasticsearch/content-legislation-vic-gov-au__production__sapi_node/_search';
 
@@ -90,7 +92,6 @@ export const vicLegislation: Source = {
   id: 'vic-legislation',
   name: 'VIC legislation (new and changed Acts and statutory rules)',
   kind: 'regulatory',
-  jurisdiction: 'VIC',
   homepage: 'https://www.legislation.vic.gov.au',
   run: run({
     url: LEGISLATION_URL,
@@ -131,8 +132,8 @@ export const epaVicNews: Source = {
   id: 'epa-vic-news',
   name: 'EPA Victoria news and media releases',
   kind: 'regulatory',
-  jurisdiction: 'VIC',
   homepage: 'https://www.epa.vic.gov.au/about-epa/news-and-updates',
+  prose: true,
   run: run({
     url: EPA_URL,
     schema: NewsHit,

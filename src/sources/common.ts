@@ -1,17 +1,14 @@
-import { okAsync, errAsync, Result } from 'neverthrow';
+import { okAsync, errAsync, Result, type ResultAsync } from 'neverthrow';
 import { z } from 'zod';
 import { daysBefore, newestOf } from './dates';
-import type { FetchOutcome, SourceError } from './types';
+import type { FetchOutcome, SourceContext, SourceError } from './types';
 
-// A text field that can be missing or null. It becomes a trimmed string.
+export const FIRST_RUN_DAYS = 365;
+
 export const text = z.string().nullish().transform((value) => (value ?? '').trim());
 
-// A long schema message fills the run log, thus it is cut.
 export const parseError = (url: string, message: string) => errAsync<FetchOutcome, SourceError>({ type: 'parse', url, message: message.slice(0, 500) });
 
-export const badPageState = (url: string) => parseError(url, 'The page state is not valid.');
-
-// A parse that can throw, for example of an HTML page.
 export const tryParse = <T>(url: string, parse: () => T): Result<T, SourceError> =>
   Result.fromThrowable(parse, (cause): SourceError => ({ type: 'parse', url, message: String(cause).slice(0, 500) }))();
 
@@ -20,20 +17,36 @@ export const changed = ({ records, cursor = null, next = null }: { records: unkn
 
 export const unchanged = () => okAsync<FetchOutcome, SourceError>({ type: 'unchanged' });
 
-// "Name: value" lines. A line with an empty value is left out.
+type Run = (ctx: SourceContext) => ResultAsync<FetchOutcome, SourceError>;
+
+export const paged =
+  <T extends z.ZodType>({ url, state, first, next }: { url: string; state: T; first: Run; next: (state: z.infer<T>, ctx: SourceContext) => ResultAsync<FetchOutcome, SourceError> }): Run =>
+  (ctx) => {
+    if (ctx.page === null) return first(ctx);
+    const parsed = state.safeParse(ctx.page);
+    return parsed.success ? next(parsed.data, ctx) : parseError(url, 'The page state is not valid.');
+  };
+
 export const lines = (pairs: [string, string][]) =>
   pairs
     .filter(([, value]) => value !== '')
     .map(([name, value]) => `${name}: ${value}`)
     .join('\n');
 
-// The first item for each key, in list order.
-export const uniqueBy = <T>(list: T[], key: (item: T) => string) => list.filter((item, i) => list.findIndex((other) => key(other) === key(item)) === i);
+export const uniqueBy = <T>(list: T[], key: (item: T) => string) => {
+  const seen = new Set<string>();
+  return list.filter((item) => {
+    const k = key(item);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+};
 
-// One page of a register that lists the newest records first. The register
-// can add a record with an older date, thus a run reads back to `rereadDays`
-// before the cursor. The upsert ignores the records that did not change. A
-// record with no date stays, because code cannot place it.
+export const dollarAmounts = (text: string) =>
+  [...text.matchAll(/\$\s?([\d,]+(?:\.\d{2})?)/g)].map((m) => ({ amount: Number((m[1] ?? '').replace(/,/g, '')), index: m.index, length: m[0].length }));
+
+// Register can add older-dated records: reread `rereadDays` before cursor. Keep undated records.
 export const newestFirstPage = <R>({
   rows,
   dateOf,

@@ -4,7 +4,6 @@ export type AtomEntry = { id: string; title: string; link: string; updated: stri
 
 const tag = (xml: string, name: string) => xml.match(new RegExp(`<${name}\\b[^>]*>([\\s\\S]*?)<\\/${name}>`, 'i'))?.[1]?.trim() ?? '';
 
-// The legislation feeds give a title, a link and a date. They give no summary.
 export const readAtom = (xml: string): AtomEntry[] =>
   [...xml.matchAll(/<entry\b[\s\S]*?<\/entry>/gi)].map((m) => {
     const entry = m[0];

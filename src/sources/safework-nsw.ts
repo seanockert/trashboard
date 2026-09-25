@@ -1,22 +1,19 @@
 import type { ResultAsync } from 'neverthrow';
 import { z } from 'zod';
-import { badPageState, changed, parseError, unchanged, uniqueBy } from './common';
+import { changed, paged, parseError, unchanged, uniqueBy } from './common';
 import { datesIn, MONTHS, newestOf } from './dates';
 import { htmlToText, inlineText } from './html';
 import { getText } from './http';
 import type { FetchOutcome, Source, SourceError } from './types';
 
-// SafeWork NSW publishes one page of prosecution summaries for each month.
-// The month page addresses do not follow one pattern, thus the first page
-// reads them from the index. Each month page is then one invocation.
+// Month URLs have no pattern: first page reads them from index.
 const INDEX = 'https://www.safework.nsw.gov.au/compliance-and-prosecutions/prosecutions';
-// SafeWork publishes some months late and can add to a month page, thus a run reads again the months near the newest date seen.
+// Months publish late and change: reread near newest date.
 const REREAD_MONTHS = 2;
 
-export type MonthPage = { url: string; month: string };
+type MonthPage = { url: string; month: string };
 
-// "years/2025-months/december2025" is December 2025. "years/2025/august-2023" is August 2023.
-// "years/2025/may" has no year in its last part, thus the year comes from the path.
+// "years/2025/august-2023" = Aug 2023. "years/2025/may" has no year: take it from path.
 export const monthPages = (html: string): MonthPage[] => {
   const links = [...html.matchAll(/href="(https:\/\/www\.safework\.nsw\.gov\.au\/compliance-and-prosecutions\/prosecutions\/years\/[^"]+)"/g)].map((m) => m[1] ?? '');
   const pages = links.flatMap((url): MonthPage[] => {
@@ -28,7 +25,7 @@ export const monthPages = (html: string): MonthPage[] => {
   return uniqueBy(pages, (page) => page.url).toSorted((a, b) => b.month.localeCompare(a.month));
 };
 
-// Each summary is `<div id="component_N"><h2>party</h2><h3>date</h3><p>...</p></div>`.
+// Summary: `<div id="component_N"><h2>party</h2><h3>date</h3><p>...</p></div>`.
 export const parseMonthPage = ({ html, url }: { html: string; url: string }) =>
   [...html.matchAll(/<div id="component_(\d+)">\s*<h2>([\s\S]*?)<\/h2>\s*<h3>([\s\S]*?)<\/h3>([\s\S]*?)<\/div>/g)].map((m) => {
     const party = inlineText(m[2] ?? '');
@@ -47,7 +44,6 @@ export const parseMonthPage = ({ html, url }: { html: string; url: string }) =>
     };
   });
 
-// `newest` is the newest date that the run has seen so far.
 const Pages = z.object({ pages: z.array(z.object({ url: z.string(), month: z.string() })), index: z.number().int().min(0), newest: z.string().nullable() });
 type Pages = z.infer<typeof Pages>;
 
@@ -66,7 +62,6 @@ const fetchMonth = ({ state, cursor }: { state: Pages; cursor: string | null }):
     const records = parseMonthPage({ html: text, url: page.url });
     const newest = newestOf([state.newest, ...records.map((r) => r.publishedAt)]);
     const isLast = state.index + 1 >= state.pages.length;
-    // The pipeline saves the cursor after the last page only.
     return changed({ records, cursor: newestOf([cursor, newest]), next: isLast ? null : { ...state, index: state.index + 1, newest } });
   });
 };
@@ -85,11 +80,12 @@ export const safeworkNsw: Source = {
   id: 'safework-nsw',
   name: 'SafeWork NSW prosecutions',
   kind: 'enforcement',
-  jurisdiction: 'NSW',
   homepage: INDEX,
-  run: ({ cursor, page }) => {
-    if (page === null) return fetchIndex(cursor);
-    const state = Pages.safeParse(page);
-    return state.success ? fetchMonth({ state: state.data, cursor }) : badPageState(INDEX);
-  },
+  prose: true,
+  run: paged({
+    url: INDEX,
+    state: Pages,
+    first: ({ cursor }) => fetchIndex(cursor),
+    next: (state, { cursor }) => fetchMonth({ state, cursor }),
+  }),
 };
