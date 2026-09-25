@@ -1,8 +1,10 @@
 // Suggestions for the omni-bar. See OmniBar in src/web/pages.tsx.
 // The form has the filter keys and values in `data-spec`: [{ key, label, options: [{ token, label }] }].
-(() => {
+// htmx swaps the body without a reload, thus the script starts again on each new form.
+const startOmni = () => {
   const form = document.querySelector('form.omni');
-  if (!form) return;
+  if (!form || form.dataset.started) return;
+  form.dataset.started = '1';
   const input = form.querySelector('input[name=q]');
   const mirror = form.querySelector('.omni-mirror');
   const pop = form.querySelector('.omni-pop');
@@ -161,8 +163,11 @@
 
   const pick = (item) => {
     if (item.kind === 'key') replaceWord(`${item.field.key}:`);
-    else if (item.kind === 'value') replaceWord(`${item.field.key}:${item.option.token} `, item.field.key);
-    else if (item.kind === 'match') return form.requestSubmit();
+    // A picked value applies at once. Free text waits for Enter.
+    else if (item.kind === 'value') {
+      replaceWord(`${item.field.key}:${item.option.token}`, item.field.key);
+      return form.requestSubmit();
+    } else if (item.kind === 'match') return form.requestSubmit();
     else return (location.href = `/search?${new URLSearchParams({ q: item.text })}`);
     paint();
     render();
@@ -202,4 +207,6 @@
   });
 
   paint();
-})();
+};
+startOmni();
+document.addEventListener('htmx:afterSwap', startOmni);

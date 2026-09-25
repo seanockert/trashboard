@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { EnforcementAnswers, ITEM_TYPES, LINES_OF_BUSINESS, RegulatoryAnswers, TOPICS } from '../jev/answers';
 import { Jurisdiction, type StoredItem, type Triage } from '../items';
 import { PARTY_GROUPS } from '../parties';
-import { FLAG_MIN, PRIORITY_HIGH, PRIORITY_MEDIUM } from '../rank';
+import { FLAG_MIN, PRIORITY_HIGH, PRIORITY_LEVELS, PRIORITY_MEDIUM, type PriorityLevel } from '../rank';
 import { SORTS, type InboxRow, type Period, type Scope, type Sort } from '../db';
 import { ftsFilter } from '../search';
 import { omniField, parseOmni, formatOmni } from './omnibar';
@@ -95,6 +95,9 @@ const RECENT_PERIODS = [
   { token: '5y', label: 'Last 5 years', days: 1825 },
 ];
 
+// All items. The day of an item is never empty, thus a range from the first day holds all of them.
+const ALL_TIME = { token: 'all', label: 'All time' };
+
 const QUARTERS_SHOWN = 8;
 
 // New items in this period show in the inbox when the user sets no period.
@@ -104,19 +107,23 @@ export const DEFAULT_PERIOD = '90d';
 export const periodRange = (token: string, now: Date): Period & { label: string } => {
   const recent = RECENT_PERIODS.find((p) => p.token === token);
   if (recent !== undefined) return { from: brisbaneDay(addDays(now, -recent.days)), to: brisbaneDay(now), label: recent.label };
+  if (token === ALL_TIME.token) return { from: '0000-01-01', to: brisbaneDay(now), label: ALL_TIME.label };
   return quarterRange(token);
 };
+
+const PRIORITY_LEVEL_LABELS: Record<PriorityLevel, string> = { high: 'High', medium: 'Medium', low: 'Low' };
 
 // The fields change each quarter, thus they are made for a date.
 export const inboxFields = (now: Date) => ({
   period: omniField('period', 'Period', [
-    ...RECENT_PERIODS.map(({ token, label }) => ({ token, label, value: token })),
+    ...[...RECENT_PERIODS, ALL_TIME].map(({ token, label }) => ({ token, label, value: token })),
     ...recentQuarters(now, QUARTERS_SHOWN).map((q) => ({ token: q, label: quarterRange(q).label, value: q })),
   ]),
   jurisdiction: omniField('jurisdiction', 'Jurisdiction', Jurisdiction.options.map((j) => ({ token: j, label: j, value: j }))),
   topic: omniField('topic', 'Topic', TOPIC_KEYS.map((key) => ({ ...TOPIC_OPTIONS[key], value: key }))),
   type: omniField('type', 'Type', ITEM_TYPES.map((key) => ({ token: key, label: ITEM_TYPE_LABELS[key] ?? key, value: key }))),
   company: omniField('company', 'Company named', [...PARTY_GROUPS.map((g) => ({ token: g.id, label: g.label, value: g.id })), { token: 'any', label: 'Any listed company', value: 'any' }]),
+  priority: omniField('priority', 'Priority', PRIORITY_LEVELS.map((level) => ({ token: level, label: PRIORITY_LEVEL_LABELS[level], value: level }))),
 });
 export type InboxFields = ReturnType<typeof inboxFields>;
 
@@ -132,11 +139,19 @@ const InboxParams = z.object({
   page: optional(z.coerce.number().int().min(1).max(1000)).default(1).catch(1),
 });
 
+// In the inbox, the default period on the New tab is the same as no period. Thus the URL does not have it,
+// and it does not go to the other tabs.
 export const parseInboxFilters = (params: Record<string, string>, now: Date) => {
   const { q, ...rest } = InboxParams.parse(params);
-  return { ...parseOmni(inboxFields(now), q), ...rest };
+  const omni = parseOmni(inboxFields(now), q);
+  const isDefault = rest.tab === 'new' && rest.view === undefined && omni.picked.period === DEFAULT_PERIOD;
+  return { ...omni, picked: { ...omni.picked, period: isDefault ? undefined : omni.picked.period }, ...rest };
 };
 export type InboxFilters = ReturnType<typeof parseInboxFilters>;
+
+// The filters that the omni-bar shows. The New tab shows its default period.
+export const shownFilters = (f: InboxFilters): InboxFilters =>
+  f.tab === 'new' && f.view === undefined && f.picked.period === undefined ? { ...f, picked: { ...f.picked, period: DEFAULT_PERIOD } } : f;
 
 // The URL parameters that give the same filters. The defaults are not in the URL.
 export const inboxParams = (f: InboxFilters, fields: InboxFields) => ({
@@ -161,6 +176,7 @@ export const scopeOf = (f: InboxFilters, now: Date, version: number): Scope => (
   company: f.picked.company,
   topic: f.picked.topic,
   type: f.picked.type,
+  priority: f.picked.priority,
   match: ftsFilter(f.text),
 });
 
@@ -172,7 +188,7 @@ export const snippet = (item: StoredItem) =>
   item.body.includes(item.title) && item.body.length - item.title.length < SNIPPET_MIN_EXTRA ? '' : item.body;
 
 export type Tag<K extends string = string> = { key: K; label: string };
-export type PriorityLevel = 'high' | 'medium' | 'low';
+export type { PriorityLevel };
 
 type RowBase = { item: StoredItem; priority: number; level: PriorityLevel; reasons: string[]; triage: Triage | null };
 export type Row = (RowBase & { kind: 'regulatory'; answers: RegulatoryAnswers; topics: Tag<TopicKey>[] }) | (RowBase & { kind: 'enforcement'; answers: EnforcementAnswers });
@@ -181,7 +197,8 @@ export const priorityLevel = (priority: number): PriorityLevel =>
   priority >= PRIORITY_HIGH ? 'high' : priority >= PRIORITY_MEDIUM ? 'medium' : 'low';
 
 // Short text for each level of the Scores in src/jev/questions.ts.
-const FOCUS_REASONS = ['Not about waste', 'General business rule', 'Environment rule', 'About waste'];
+// Most items are about waste (level 3), thus that level has no text.
+const FOCUS_REASONS = ['Not about waste', 'General business rule', 'Environment rule'];
 const IMPACT_REASONS = ['No effect on operations', 'Background only', 'Small admin change', 'Compliance change', 'Large cost or operations change'];
 const SEVERITY_REASONS = ['Admin matter', 'Small breach', 'Harm or risk of harm', 'Serious harm'];
 

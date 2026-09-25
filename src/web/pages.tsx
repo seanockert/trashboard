@@ -11,6 +11,7 @@ import {
   OFFENCE_LABELS,
   PAGE_SIZE,
   brisbaneDay,
+  shownFilters,
   sortOf,
   snippet,
   type DateEntry,
@@ -46,10 +47,10 @@ const inboxHref = (filters: InboxFilters, fields: InboxFields) => `/${query(inbo
 // The URL of the page with these filters, on the current page.
 const hereHref = (filters: InboxFilters, fields: InboxFields) => `/${query(inboxParams(filters, fields))}`;
 
-// One input for filters and free text. The script in /assets/omnibar.js shows the suggestions.
+// One input for filters and free text. The script in /assets/omnibar.js shows the suggestions and applies a picked filter.
 // Without the script, the user can type tokens and press Enter.
 // `hidden` keeps the tab, the view and the sort when the user changes the filters. `children` go beside "Clear all".
-// "Clear all" shows only when there are filters or text to clear.
+// "Clear all" shows only when there are filters or text to clear. A default filter that the bar shows is not one to clear.
 const OmniBar = ({
   fields,
   filters,
@@ -61,7 +62,8 @@ const OmniBar = ({
   hidden: Record<string, string | undefined>;
   children?: Child;
 }) => {
-  const omni = formatOmni(fields, filters);
+  const omni = formatOmni(fields, shownFilters(filters));
+  const clearable = formatOmni(fields, filters) !== '';
   return (
     <form class="omni stack-half" method="get" action="/" role="search" data-spec={JSON.stringify(omniSpec(fields))}>
       <div class="omni-box">
@@ -84,10 +86,10 @@ const OmniBar = ({
         <div class="omni-pop" id="omni-list" role="listbox" aria-label="Suggestions" hidden />
       </div>
       {Object.entries(hidden).map(([name, value]) => value !== undefined && <input type="hidden" name={name} value={value} />)}
-      {(children !== undefined || omni !== '') && (
+      {(children !== undefined || clearable) && (
         <div class="omni-toggles inline-2x inline-wrap">
           {children}
-          {omni !== '' && (
+          {clearable && (
             <a class="note" href={`/${query(hidden)}`}>
               Clear all
             </a>
@@ -98,7 +100,6 @@ const OmniBar = ({
       <noscript>
         <button type="submit">Apply</button>
       </noscript>
-      <script src="/assets/omnibar.js" defer />
     </form>
   );
 };
@@ -119,26 +120,25 @@ const Title = ({ item }: { item: StoredItem }) => (
   </a>
 );
 
-const PRIORITY_LABELS: Record<PriorityLevel, string> = { high: 'High priority', medium: 'Medium priority', low: 'Low priority' };
+const PRIORITY_LABELS: Record<PriorityLevel, string> = { high: 'High', medium: 'Medium', low: 'Low' };
 
 const PRIORITY_HELP = {
   regulatory: 'Priority combines how much the item is about waste with its effect on operations, and whether it needs action or invites submissions.',
   enforcement: 'Priority combines how serious the conduct is with the risk that it can also happen in your operations.',
 };
 
-// The badge and the reasons tell the user why the item is in its place in the list.
+// The level and the reasons tell the user why the item is in its place in the list.
 const Priority = ({ row }: { row: Row }) => (
-  <>
-    <div class={`prio ${row.level}`} title={`${PRIORITY_HELP[row.kind]} Score: ${Math.round(row.priority * 100)} of 100.`}>
-      {PRIORITY_LABELS[row.level]}
-    </div>
-    <div>{row.reasons.join(' · ')}</div>
-  </>
+  <div class="inline-half" title={`${PRIORITY_HELP[row.kind]} Score: ${Math.round(row.priority * 100)} of 100.`}>
+    <div class={`prio ${row.level}`}>{PRIORITY_LABELS[row.level]}</div>
+    {row.reasons.length > 0 && <div>{row.reasons.join(' · ')}</div>}
+  </div>
 );
 
 // A tag is a link that applies its filter. The tag of the current filter removes it.
-const TagLink = ({ href, on, warn = false, text }: { href: string; on: boolean; warn?: boolean; text: string }) => (
-  <a class={`tag${warn ? ' warn' : ''}${on ? ' on' : ''}`} href={href} title={on ? 'Remove this filter' : 'Show only items with this tag'}>
+// `plain` gives a text link, for the topics below the flags.
+const TagLink = ({ href, on, warn = false, plain = false, text }: { href: string; on: boolean; warn?: boolean; plain?: boolean; text: string }) => (
+  <a class={`${plain ? 'topic' : 'tag'}${warn ? ' warn' : ''}${on ? ' on' : ''}`} href={href} title={on ? 'Remove this filter' : 'Show only items with this tag'}>
     {text}
   </a>
 );
@@ -186,30 +186,46 @@ const DateTags = ({ item }: { item: StoredItem }) => {
   );
 };
 
-// Act or dismiss a new item. Add a note while acting, then mark it done.
+const BookmarkIcon = () => (
+  <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+    <path stroke-linecap="round" stroke-linejoin="round" d="M6.5 4h11v16.5L12 16.5l-5.5 4z" />
+  </svg>
+);
+
+const CloseIcon = () => (
+  <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+    <path stroke-linecap="round" d="M6.5 6.5l11 11M17.5 6.5l-11 11" />
+  </svg>
+);
+
+// Act on or dismiss a new item with one click.
+const QuickTriage = ({ item, back }: { item: StoredItem; back: string }) => (
+  <form class="quick inline-half" method="post" action="/triage">
+    <input type="hidden" name="itemId" value={item.id} />
+    <input type="hidden" name="back" value={back} />
+    <button type="submit" name="status" value="acting" class="icon" aria-label="Act" title="Act on it. Moves it to Acting.">
+      <BookmarkIcon />
+    </button>
+    <button type="submit" name="status" value="dismissed" class="icon secondary" aria-label="Dismiss" title="Chuck it. Restore it from Done & dismissed any time.">
+      <CloseIcon />
+    </button>
+  </form>
+);
+
+// Add a note while acting, then mark it done.
 // "new" as the status makes the item new again (Drop, Restore).
-const TriageForm = ({ item, triage, back }: { item: StoredItem; triage: Triage | null; back: string }) => (
+const TriageForm = ({ item, triage, back }: { item: StoredItem; triage: Triage; back: string }) => (
   <form class="triage stack-half" method="post" action="/triage">
     <input type="hidden" name="itemId" value={item.id} />
     <input type="hidden" name="back" value={back} />
-    {triage?.status === 'acting' && (
+    {triage.status === 'acting' && (
       <textarea name="note" aria-label="Note" rows={2} maxlength={500} placeholder="Note, for example: raised with ops, due 1 July">
         {triage.note}
       </textarea>
     )}
-    {(triage?.status === 'done' || triage?.status === 'dismissed') && triage.note !== '' && <div class="triage-note">{triage.note}</div>}
+    {(triage.status === 'done' || triage.status === 'dismissed') && triage.note !== '' && <div class="triage-note">{triage.note}</div>}
     <div class="inline-half inline-wrap">
-      {triage === null && (
-        <>
-          <button type="submit" name="status" value="acting">
-            Act
-          </button>
-          <button type="submit" name="status" value="dismissed" class="secondary" title="Chuck it. Restore it from Done & dismissed any time.">
-            Dismiss
-          </button>
-        </>
-      )}
-      {triage?.status === 'acting' && (
+      {triage.status === 'acting' && (
         <>
           <button type="submit" name="status" value="done">
             Done
@@ -222,7 +238,7 @@ const TriageForm = ({ item, triage, back }: { item: StoredItem; triage: Triage |
           </button>
         </>
       )}
-      {triage?.status === 'done' && (
+      {triage.status === 'done' && (
         <>
           <div class="pill done">Done</div>
           <button type="submit" name="status" value="acting" class="secondary">
@@ -230,19 +246,17 @@ const TriageForm = ({ item, triage, back }: { item: StoredItem; triage: Triage |
           </button>
         </>
       )}
-      {triage?.status === 'dismissed' && (
-        <>
-          <div class="pill dismissed">Dismissed</div>
-          <button type="submit" name="status" value="new" class="secondary">
-            Restore
-          </button>
-        </>
+      {triage.status === 'dismissed' && (
+        <button type="submit" name="status" value="new" class="secondary">
+          Restore
+        </button>
       )}
     </div>
   </form>
 );
 
-// One card for both kinds of item. The tags link to the inbox with that filter.
+// One card for both kinds of item. The head gives the priority and the facts.
+// The flags below the text tell the user why to look now. The topics are text links to the inbox with that filter.
 // `badge` replaces the priority, for example with the search match.
 const ItemCard = ({ row, filters, fields, back, badge }: { row: Row; filters: InboxFilters; fields: InboxFields; back: string; badge?: Child }) => {
   const { item } = row;
@@ -251,20 +265,19 @@ const ItemCard = ({ row, filters, fields, back, badge }: { row: Row; filters: In
     inboxHref({ ...filters, picked: { ...picked, [key]: picked[key] === value ? undefined : value } }, fields);
   const group = item.partyGroup;
   const companyValue = fields.company.options.find((o) => o.value === group)?.value;
+  const facts =
+    row.kind === 'regulatory'
+      ? [item.jurisdiction, ITEM_TYPE_LABELS[row.answers.itemType.choice], date(item.publishedAt)]
+      : [item.jurisdiction, item.action, item.penaltyAud === null ? undefined : aud(item.penaltyAud), date(item.publishedAt)];
+  const closesLater = item.closesOn !== null && item.closesOn >= today();
   return (
     <div class="card stack-half" id={anchor(item)}>
-      <div class="meta inline-wrap">
-        {badge ?? <Priority row={row} />}
-        <div>{item.jurisdiction}</div>
-        <div>{date(item.publishedAt)}</div>
-        {row.kind === 'regulatory' ? (
-          <div>{ITEM_TYPE_LABELS[row.answers.itemType.choice]}</div>
-        ) : (
-          <>
-            <div>{item.action}</div>
-            {item.penaltyAud !== null && <div>{aud(item.penaltyAud)}</div>}
-          </>
-        )}
+      <div class="card-head">
+        <div class="meta inline-wrap">
+          {badge ?? <Priority row={row} />}
+          <div>{facts.filter((fact) => fact !== undefined && fact !== '').join(' · ')}</div>
+        </div>
+        {row.triage === null && <QuickTriage item={item} back={`${back}#${anchor(item)}`} />}
       </div>
       <Title item={item} />
       <ItemText item={item} />
@@ -277,24 +290,26 @@ const ItemCard = ({ row, filters, fields, back, badge }: { row: Row; filters: In
             text={row.kind === 'regulatory' ? `Names ${GROUP_LABELS[group] ?? group}` : (GROUP_LABELS[group] ?? group)}
           />
         )}
-        {row.kind === 'regulatory' ? (
+        {row.kind === 'regulatory' && (
           <>
-            <DateTags item={item} />
             {row.answers.actionRequired.noul >= FLAG_MIN && <div class="tag warn">Action may be needed</div>}
-            {row.answers.submissionsOpen.noul >= FLAG_MIN && <div class="tag warn">Submissions invited</div>}
-            {row.topics.map((topic) => (
-              <TagLink href={toggle('topic', topic.key)} on={picked.topic === topic.key} text={topic.label} />
-            ))}
-          </>
-        ) : (
-          <>
-            <TagLink href={toggle('type', 'enforcement')} on={picked.type === 'enforcement'} text="Enforcement" />
-            <div class="tag">{OFFENCE_LABELS[row.answers.offence.choice] ?? row.answers.offence.choice}</div>
-            {item.location !== null && <div class="tag">{item.location.slice(0, 60)}</div>}
+            {row.answers.submissionsOpen.noul >= FLAG_MIN && !closesLater && <div class="tag warn">Submissions invited</div>}
+            <DateTags item={item} />
           </>
         )}
       </div>
-      <TriageForm item={item} triage={row.triage} back={`${back}#${anchor(item)}`} />
+      <div class="topics inline-wrap">
+        {row.kind === 'regulatory' ? (
+          row.topics.map((topic) => <TagLink plain href={toggle('topic', topic.key)} on={picked.topic === topic.key} text={topic.label} />)
+        ) : (
+          <>
+            <TagLink plain href={toggle('type', 'enforcement')} on={picked.type === 'enforcement'} text="Enforcement" />
+            <div>{OFFENCE_LABELS[row.answers.offence.choice] ?? row.answers.offence.choice}</div>
+            {item.location !== null && <div>{item.location.slice(0, 60)}</div>}
+          </>
+        )}
+      </div>
+      {row.triage !== null && <TriageForm item={item} triage={row.triage} back={`${back}#${anchor(item)}`} />}
     </div>
   );
 };
@@ -355,7 +370,7 @@ const DateTable = ({ entries }: { entries: DateEntry[] }) => (
             </td>
             <td>{entry.row.item.jurisdiction}</td>
             <td>
-              <div class={`prio ${entry.row.level}`}>{PRIORITY_LABELS[entry.row.level].replace(' priority', '')}</div>
+              <div class={`prio ${entry.row.level}`}>{PRIORITY_LABELS[entry.row.level]}</div>
             </td>
           </tr>
         ))}
@@ -363,6 +378,49 @@ const DateTable = ({ entries }: { entries: DateEntry[] }) => (
     </table>
   </div>
 );
+
+const shortDate = (iso: string) => new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+
+// "Today", "Tomorrow", "In 5 days".
+const daysFrom = (from: string, to: string) => {
+  const days = Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000);
+  return days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : `In ${days} days`;
+};
+
+// The coming dates of the inbox, beside the list on a wide screen, and folded above it on a narrow screen.
+// Most dates are submission close dates, thus only a start date has a label.
+const DueList = ({ entries }: { entries: DateEntry[] }) => {
+  const now = today();
+  return (
+    <details class="due">
+      <summary>
+        <h2>Due in the next {DUE_DAYS} days</h2>
+        <div class="note">{entries.length}</div>
+      </summary>
+      <ul class="stack">
+        {entries.map((entry) => (
+          <li class="due-item">
+            <div class="due-date">
+              <div>{shortDate(entry.date)}</div>
+              <div class="note">{daysFrom(now, entry.date)}</div>
+            </div>
+            <div class="stack-quarter">
+              <Title item={entry.row.item} />
+              <div class="note inline-half inline-wrap">
+                <div class={`prio ${entry.row.level}`} title="Priority">
+                  {PRIORITY_LABELS[entry.row.level]}
+                </div>
+                <div>{entry.row.item.jurisdiction}</div>
+                {entry.type === 'starts' && <div>Starts to apply</div>}
+                {entry.row.triage?.status === 'acting' && <div class="pill acting">Acting</div>}
+              </div>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+};
 
 const TAB_LABELS: Record<Tab, string> = { new: 'New', acting: 'Acting', done: 'Done & dismissed' };
 
@@ -375,7 +433,7 @@ const SortSelect = ({ filters, fields }: { filters: InboxFilters; fields: InboxF
   return (
     <form class="sort" method="get" action="/">
       {Object.entries(params).map(([name, value]) => value !== undefined && value !== '' && <input type="hidden" name={name} value={String(value)} />)}
-      <select name="sort" aria-label="Sort" onchange="this.form.submit()">
+      <select name="sort" aria-label="Sort" onchange="this.form.requestSubmit()">
         {sorts.map((s) => (
           <option value={s} selected={sortOf(filters) === s}>
             {SORT_LABELS[s]}
@@ -404,33 +462,32 @@ export const InboxPage = ({ model, filters, fields }: { model: InboxModel; filte
   const back = hereHref(filters, fields);
   return (
     <Layout title="Inbox" path="/" menu={<a href={hereHref({ ...report, page: 1 }, fields)}>Report</a>}>
-      <OmniBar fields={fields} filters={filters} hidden={{ tab: filters.tab === 'new' ? undefined : filters.tab, sort: filters.sort }} />
-      <nav class="tabs inline" aria-label="Status">
-        {(['new', 'acting', 'done'] as const).map((tab) => (
-          <a href={inboxHref({ ...filters, tab }, fields)} class={filters.tab === tab ? 'on' : ''} aria-current={filters.tab === tab ? 'page' : undefined}>
-            {TAB_LABELS[tab]} <span class="note">{model.counts[tab]}</span>
-          </a>
-        ))}
-        <SortSelect filters={filters} fields={fields} />
-      </nav>
-      {filters.tab !== 'done' && model.due.length > 0 && (
-        <>
-          <h2>Don’t miss the truck: due in the next {DUE_DAYS} days</h2>
-          <DateTable entries={model.due} />
-        </>
-      )}
-      {filters.tab === 'new' && filters.picked.period === undefined && (
-        <p class="note">Fresh from the last 90 days.{sortOf(filters) === 'priority' && ' JJ Richards first, then the big stuff.'}</p>
-      )}
-      {model.rows.length === 0 ? (
-        <div class="empty">
-          {filters.text === '' && filters.picked.topic === undefined ? EMPTY_TEXT[filters.tab] : 'Nothing in this pile. Try other filters.'}
-          <AskAi text={filters.text} />
+      <div class="inbox">
+        <div class="inbox-bar stack">
+          <OmniBar fields={fields} filters={filters} hidden={{ tab: filters.tab === 'new' ? undefined : filters.tab, sort: filters.sort }} />
+          <nav class="tabs inline" aria-label="Status">
+            {(['new', 'acting', 'done'] as const).map((tab) => (
+              <a href={inboxHref({ ...filters, tab }, fields)} class={filters.tab === tab ? 'on' : ''} aria-current={filters.tab === tab ? 'page' : undefined}>
+                {TAB_LABELS[tab]} <span class="note">{model.counts[tab]}</span>
+              </a>
+            ))}
+            <SortSelect filters={filters} fields={fields} />
+          </nav>
         </div>
-      ) : (
-        model.rows.map((row) => <ItemCard row={row} filters={filters} fields={fields} back={back} />)
-      )}
-      <Pager filters={filters} fields={fields} matched={model.counts[filters.tab]} />
+        {filters.tab !== 'done' && model.due.length > 0 && <DueList entries={model.due} />}
+        <div class="inbox-list stack-half">
+          {filters.tab === 'new' && filters.picked.period === undefined && sortOf(filters) === 'priority' && <p class="note">JJ Richards first, then the big stuff.</p>}
+          {model.rows.length === 0 ? (
+            <div class="empty">
+              {filters.text === '' && filters.picked.topic === undefined ? EMPTY_TEXT[filters.tab] : 'Nothing in this pile. Try other filters.'}
+              <AskAi text={filters.text} />
+            </div>
+          ) : (
+            model.rows.map((row) => <ItemCard row={row} filters={filters} fields={fields} back={back} />)
+          )}
+          <Pager filters={filters} fields={fields} matched={model.counts[filters.tab]} />
+        </div>
+      </div>
     </Layout>
   );
 };

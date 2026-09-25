@@ -17,6 +17,9 @@ export const PRIORITY_MIN = 0.15;
 export const PRIORITY_HIGH = 0.45;
 export const PRIORITY_MEDIUM = 0.25;
 
+export const PRIORITY_LEVELS = ['high', 'medium', 'low'] as const;
+export type PriorityLevel = (typeof PRIORITY_LEVELS)[number];
+
 const WEIGHTS = { impact: 1, action: 0.5, submissions: 0.3 };
 
 const answer = (path: string) => `COALESCE(json_extract(answers, '$.${path}'), 0)`;
@@ -55,6 +58,14 @@ const ENFORCEMENT_PRIORITY_SQL = `(${answer('severity.score')} / 3.0 * (0.5 + 0.
 
 // One priority for both kinds, thus the inbox can sort them in one list.
 export const ITEM_PRIORITY_SQL = `(CASE kind WHEN 'regulatory' THEN ${PRIORITY_SQL} ELSE ${ENFORCEMENT_PRIORITY_SQL} END)`;
+
+// The items in one priority band. The bands are the same as the badges.
+export const priorityLevelSql = (level: PriorityLevel) =>
+  ({
+    high: `(${ITEM_PRIORITY_SQL} >= ${PRIORITY_HIGH})`,
+    medium: `(${ITEM_PRIORITY_SQL} >= ${PRIORITY_MEDIUM} AND ${ITEM_PRIORITY_SQL} < ${PRIORITY_HIGH})`,
+    low: `(${ITEM_PRIORITY_SQL} < ${PRIORITY_MEDIUM})`,
+  })[level];
 
 // An enforcement record is in the inbox when it is about a waste operator, and it names a known group or the conduct is serious.
 const IN_INBOX_ENFORCEMENT_SQL = `(${IS_WASTE_OPERATOR_SQL} AND (party_group IS NOT NULL OR ${IS_SERIOUS_SQL}))`;

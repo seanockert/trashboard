@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { Jurisdiction, TriageStatus, type NewItem, type StoredItem, type Triage } from './items';
 import { groupOf, PARTIES_VERSION } from './parties';
-import { flagSql, IN_INBOX_SQL, IS_RELEVANT_SQL, IS_SERIOUS_SQL, IS_WASTE_OPERATOR_SQL, ITEM_PRIORITY_SQL, PRIORITY_HIGH, PRIORITY_SQL, type FlagKey } from './rank';
+import { flagSql, IN_INBOX_SQL, IS_RELEVANT_SQL, IS_SERIOUS_SQL, IS_WASTE_OPERATOR_SQL, ITEM_PRIORITY_SQL, PRIORITY_HIGH, PRIORITY_SQL, priorityLevelSql, type FlagKey, type PriorityLevel } from './rank';
 import { NEEDS_SUMMARY_SQL, Summary } from './summary';
 
 const sha256 = async (text: string) => {
@@ -286,6 +286,7 @@ export type Scope = {
   company: string | undefined;
   topic: FlagKey | undefined;
   type: string | undefined;
+  priority: PriorityLevel | undefined;
   // An FTS5 query, see ftsFilter.
   match: string | undefined;
 };
@@ -303,6 +304,7 @@ const scopeClauses = (s: Scope): Clause[] => [
   ...when(s.topic !== undefined, () => clause(`+kind = 'regulatory' AND ${flagSql(s.topic ?? 'actionRequired')}`)),
   ...when(s.type === 'enforcement', () => clause(`(+kind = 'enforcement' OR ${ITEM_TYPE_SQL} = 'enforcement')`)),
   ...when(s.type !== undefined && s.type !== 'enforcement', () => clause(`+kind = 'regulatory' AND ${ITEM_TYPE_SQL} = ?`, s.type ?? '')),
+  ...when(s.priority !== undefined, () => clause(priorityLevelSql(s.priority ?? 'high'))),
   // Items whose title, body or party has each word.
   ...when(s.match !== undefined && s.match !== '', () => clause('items.rowid IN (SELECT rowid FROM items_fts WHERE items_fts MATCH ?)', s.match ?? '')),
 ];

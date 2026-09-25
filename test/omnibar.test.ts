@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ftsFilter } from '../src/search';
-import { inboxFields, inboxParams, parseInboxFilters, scopeOf } from '../src/web/models';
+import { inboxFields, inboxParams, parseInboxFilters, scopeOf, shownFilters } from '../src/web/models';
 import { formatOmni, parseOmni } from '../src/web/omnibar';
 
 const now = new Date('2026-09-24T00:00:00Z');
@@ -49,7 +49,19 @@ describe('inbox filters', () => {
       type: 'enforcement',
       match: '"leachate"*',
     }));
+  it('gives the priority band to the scope', () => expect(scopeOf(parseInboxFilters({ q: 'priority:High' }, now), now, 4)).toMatchObject({ priority: 'high' }));
   it('cuts a very long query', () => expect(parseInboxFilters({ q: 'a'.repeat(1000) }, now).text).toHaveLength(300));
+  it('shows the default period on the New tab only', () => {
+    expect(formatOmni(fields, shownFilters(parseInboxFilters({}, now)))).toBe('period:90d');
+    expect(formatOmni(fields, shownFilters(parseInboxFilters({ tab: 'acting' }, now)))).toBe('');
+    expect(formatOmni(fields, shownFilters(parseInboxFilters({ view: 'report' }, now)))).toBe('');
+  });
+  it('does not put the default period of the New tab in the URL', () => {
+    expect(inboxParams(parseInboxFilters({ q: 'period:90d levy' }, now), fields).q).toBe('levy');
+    expect(inboxParams(parseInboxFilters({ q: 'period:90d', tab: 'acting' }, now), fields).q).toBe('period:90d');
+  });
+  it('gives all days for the all time period', () =>
+    expect(scopeOf(parseInboxFilters({ q: 'period:all' }, now), now, 4).period).toMatchObject({ from: '0000-01-01', to: '2026-09-24' }));
 });
 
 describe('ftsFilter', () => {

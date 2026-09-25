@@ -9,12 +9,17 @@ const INTRO_KEY = 'trashboard_intro';
 
 // Shows the intro one time, closes the settings menu on an outside click,
 // and puts the cursor in the search box of the page when the user types "/".
+// htmx swaps the body and does not run this script again, thus the listeners are on the document.
 const SCRIPT = `
-const intro = document.getElementById('intro');
-if (intro && !localStorage.getItem('${INTRO_KEY}')) intro.showModal();
-intro?.addEventListener('close', () => localStorage.setItem('${INTRO_KEY}', '1'));
-intro?.addEventListener('click', (e) => { if (e.target === intro) intro.close(); });
+const showIntro = () => {
+  const intro = document.getElementById('intro');
+  if (intro && !localStorage.getItem('${INTRO_KEY}')) intro.showModal();
+};
+showIntro();
+document.addEventListener('htmx:afterSwap', showIntro);
+document.addEventListener('close', (e) => { if (e.target.id === 'intro') localStorage.setItem('${INTRO_KEY}', '1'); }, true);
 document.addEventListener('click', (e) => {
+  if (e.target.id === 'intro') e.target.close();
   document.querySelectorAll('details.menu[open]').forEach((menu) => { if (!menu.contains(e.target)) menu.open = false; });
 });
 document.addEventListener('keydown', (e) => {
@@ -46,6 +51,9 @@ const Intro = () => (
 );
 
 // `menu` gives more links for the page at the top of the settings menu.
+// hx-boost fetches each link and form of the page and swaps the body, thus the page does not reload.
+// htmx keeps the head of the first page, thus the head must be the same on each page.
+// No history cache: Back fetches the page again, thus it shows the current triage.
 export const Layout = ({ title, path, menu, children }: { title: string; path: string | null; menu?: Child; children: Child }) => (
   <html lang="en-AU">
     <head>
@@ -54,9 +62,13 @@ export const Layout = ({ title, path, menu, children }: { title: string; path: s
       <meta name="robots" content="noindex" />
       <link rel="shortcut icon" href="/assets/trashboard-icon-sm.png" />
       <title>{`${title} · Trashboard`}</title>
+      <meta name="htmx-config" content='{"historyCacheSize":0}' />
       <link rel="stylesheet" href="/assets/styles.css" />
+      <script src="/assets/htmx-2.0.11.min.js" defer />
+      <script src="/assets/omnibar.js" defer />
+      <script type="module" dangerouslySetInnerHTML={{ __html: SCRIPT }} />
     </head>
-    <body>
+    <body hx-boost="true">
       {path !== null && (
         <nav class="top inline-wrap">
           <div class="brand inline-zero"><img src="/assets/trashboard-icon-sm.png" alt="" /> Trashboard</div>
@@ -80,7 +92,6 @@ export const Layout = ({ title, path, menu, children }: { title: string; path: s
       )}
       <main class="page stack">{children}</main>
       {path !== null && <Intro />}
-      {path !== null && <script dangerouslySetInnerHTML={{ __html: SCRIPT }} />}
     </body>
   </html>
 );
