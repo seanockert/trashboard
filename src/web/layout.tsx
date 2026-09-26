@@ -21,6 +21,7 @@ document.addEventListener('click', (e) => {
   document.querySelectorAll('details.menu[open]').forEach((menu) => { if (!menu.contains(e.target)) menu.open = false; });
 });
 document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') document.querySelectorAll('details.menu[open]').forEach((menu) => { menu.open = false; menu.querySelector('summary').focus(); });
   if (e.key !== '/' || e.target.closest('input, select, textarea')) return;
   e.preventDefault();
   document.getElementById('q')?.focus();
@@ -28,7 +29,7 @@ document.addEventListener('keydown', (e) => {
 `;
 
 const MenuIcon = () => (
-  <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+  <svg width="22" height="22" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
     <path stroke-linecap="round" stroke-linejoin="round" d="M3.8 6.8h16.5M3.8 12h16.5M3.8 17.3h16.5"/>
   </svg>
 );
@@ -59,7 +60,15 @@ export const Layout = ({ title, path, menu, children }: { title: string; path: s
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width, viewport-fit=cover, initial-scale=1.0, interactive-widget=resizes-content" />
       <meta name="robots" content="noindex" />
-      <link rel="shortcut icon" href="/assets/trashboard-icon-sm.png" />
+      <meta name="theme-color" content="#f6f6f3" media="(prefers-color-scheme: light)" />
+      <meta name="theme-color" content="#131514" media="(prefers-color-scheme: dark)" />
+      <meta name="mobile-web-app-capable" content="yes" />
+      <meta name="apple-mobile-web-app-capable" content="yes" />
+      <meta name="apple-mobile-web-app-title" content="Trashboard" />
+      <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+      <link rel="manifest" href="/manifest.webmanifest" />
+      <link rel="icon" type="image/png" href="/assets/icon-192.png" />
+      <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png" />
       <title>{`${title} · Trashboard`}</title>
       <meta name="htmx-config" content='{"historyCacheSize":0}' />
       <link rel="stylesheet" href="/assets/styles.css" />
@@ -72,15 +81,17 @@ export const Layout = ({ title, path, menu, children }: { title: string; path: s
     </head>
     <body hx-boost="true">
       {path !== null && (
-        <nav class="top inline-wrap">
+        <header class="top inline-wrap">
           <div class="brand inline-zero"><img src="/assets/trashboard-icon-sm.png" alt="" /> Trashboard</div>
-          {NAV.map((link) => (
-            <a href={link.href} class={path === link.href ? 'on' : ''} aria-current={path === link.href ? 'page' : undefined}>
-              {link.label}
-            </a>
-          ))}
+          <nav class="inline" aria-label="Main">
+            {NAV.map((link) => (
+              <a href={link.href} class={path === link.href ? 'on' : ''} aria-current={path === link.href ? 'page' : undefined}>
+                {link.label}
+              </a>
+            ))}
+          </nav>
           <details class="menu">
-            <summary aria-label="Settings" title="Settings">
+            <summary aria-label="Menu" title="Menu">
               <MenuIcon />
             </summary>
             <div class="items stack-zero">
@@ -90,7 +101,7 @@ export const Layout = ({ title, path, menu, children }: { title: string; path: s
               <a href="/logout">Log out</a>
             </div>
           </details>
-        </nav>
+        </header>
       )}
       <main class="page stack">{children}</main>
       {path !== null && <Intro />}

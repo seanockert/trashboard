@@ -80,7 +80,7 @@ const OmniBar = ({
           aria-controls="omni-list"
         />
         <div class="omni-pop" id="omni-list" role="listbox" aria-label="Suggestions" hidden />
-        <svg width="24" height="24" fill="none" class="icon-search">
+        <svg width="24" height="24" fill="none" class="icon-search" aria-hidden="true">
           <path fill="currentColor" fill-rule="evenodd" d="M14.4 15.4a6.8 6.8 0 1 1 1-1l5.2 5.1a.7.7 0 1 1-1 1.1zm-8-1.5a5.2 5.2 0 1 1 7.5 0c-2 2-5.4 2-7.4 0" clip-rule="evenodd"></path>
         </svg>
       </div>
@@ -176,14 +176,14 @@ const DateTags = ({ item }: { item: StoredItem }) => {
 };
 
 const BookmarkIcon = () => (
-  <svg width="18" height="18" fill="none" viewBox="0 0 24 24">
+  <svg width="18" height="18" fill="none" viewBox="0 0 24 24" aria-hidden="true">
     <path class="icon-base" fill="currentColor" fill-rule="evenodd" clip-rule="evenodd" d="M16 4.4q-4-.6-8 0-.7.2-.9 1Q5.7 12 7 18.7l.1.9 3.7-3.5q1.2-.9 2.4 0l3.7 3.5.1-1q1.2-6.5-.1-13.2-.2-.8-1-1M7.7 3q4.2-.6 8.4 0c1 .2 2 1 2.2 2.2q1.4 6.9.1 13.9l-.2 1.2c-.2 1-1.5 1.4-2.2.7l-4-3.7h-.3L8 20.9c-.7.7-2 .3-2.2-.7L5.5 19q-1.2-7 .1-14 .5-1.7 2.2-2" />
     <path class="icon-focus" fill="currentColor" d="M16.1 3.2a25 25 0 0 0-8.2 0q-1.6.4-2 2-1.5 6.8-.2 13.7l.4 1.9c0 .5.8.8 1.2.4l4-3.9a1 1 0 0 1 1.4 0l4 3.9c.4.4 1.1.1 1.2-.4l.4-1.9Q19.5 12 18 5.1q-.4-1.5-2-2"/>
   </svg>
 );
 
 const CloseIcon = () => (
-  <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+  <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
     <path stroke-linecap="round" d="M6.5 6.5l11 11M17.5 6.5l-11 11" />
   </svg>
 );
@@ -192,10 +192,10 @@ const QuickTriage = ({ item, back }: { item: StoredItem; back: string }) => (
   <form class="quick inline-half" method="post" action="/triage">
     <input type="hidden" name="itemId" value={item.id} />
     <input type="hidden" name="back" value={back} />
-    <button type="submit" name="status" value="acting" class="icon" aria-label="Act" title="Act on it. Moves it to Acting.">
+    <button type="submit" name="status" value="acting" class="icon" aria-label="Act" aria-describedby={`${anchor(item)}-title`} title="Act on it. Moves it to Acting.">
       <BookmarkIcon />
     </button>
-    <button type="submit" name="status" value="dismissed" class="icon secondary" aria-label="Dismiss" title="Chuck it. Restore it from Done & dismissed any time.">
+    <button type="submit" name="status" value="dismissed" class="icon secondary" aria-label="Dismiss" aria-describedby={`${anchor(item)}-title`} title="Chuck it. Restore it from Done & dismissed any time.">
       <CloseIcon />
     </button>
   </form>
@@ -257,7 +257,7 @@ const ItemCard = ({ row, filters, fields, back, badge }: { row: Row; filters: In
       : [item.jurisdiction, item.action, item.penaltyAud === null ? undefined : aud(item.penaltyAud), cardDate(item.publishedAt)];
   const closesLater = item.closesOn !== null && item.closesOn >= today();
   return (
-    <div class="card stack-half" id={anchor(item)}>
+    <article class="card stack-half" id={anchor(item)}>
       <div class="card-head">
         <div class="meta stack-quarter">
           {badge ?? <Priority row={row} />}
@@ -265,7 +265,9 @@ const ItemCard = ({ row, filters, fields, back, badge }: { row: Row; filters: In
         </div>
         {row.triage === null && <QuickTriage item={item} back={`${back}#${anchor(item)}`} />}
       </div>
-      <Title item={item} />
+      <h2 id={`${anchor(item)}-title`}>
+        <Title item={item} />
+      </h2>
       <ItemText item={item} />
       <div class="tags inline-wrap">
         {group !== null && companyValue !== undefined && (
@@ -297,7 +299,7 @@ const ItemCard = ({ row, filters, fields, back, badge }: { row: Row; filters: In
         )}
       </div>
       {row.triage !== null && <TriageForm item={item} triage={row.triage} back={`${back}#${anchor(item)}`} />}
-    </div>
+    </article>
   );
 };
 
@@ -306,13 +308,13 @@ const Pager = ({ filters, fields, matched }: { filters: InboxFilters; fields: In
   if (pages === 1) return null;
   const href = (page: number) => hereHref({ ...filters, page }, fields);
   return (
-    <div class="pager inline-between">
+    <nav class="pager inline-between" aria-label="Pages">
       {filters.page > 1 ? <a href={href(filters.page - 1)}>Previous</a> : <div />}
       <div class="note">
         Page {filters.page} of {pages}
       </div>
       {filters.page < pages ? <a href={href(filters.page + 1)}>Next</a> : <div />}
-    </div>
+    </nav>
   );
 };
 
@@ -321,7 +323,11 @@ export const LoginPage = ({ next, error }: { next: string; error: string | null 
     <form class="login stack" method="post" action="/login">
       <h1 class="inline"><img src="/assets/trashboard-icon-sm.png" height="48" width="48" alt="" />Trashboard</h1>
       <div class="note">Tip pass, please.</div>
-      {error !== null && <div class="error">{error}</div>}
+      {error !== null && (
+        <div class="error" role="alert">
+          {error}
+        </div>
+      )}
       <input type="hidden" name="next" value={next} />
       <label class="stack-quarter">
         Password <input type="password" name="password" autocomplete="current-password" required autofocus />
@@ -445,6 +451,7 @@ export const InboxPage = ({ model, filters, fields }: { model: InboxModel; filte
   const back = hereHref(filters, fields);
   return (
     <Layout title="Inbox" path="/" menu={<a href={hereHref({ ...report, page: 1 }, fields)}>Report</a>}>
+      <h1 class="visually-hidden">Inbox</h1>
       <div class="inbox">
         <div class="inbox-bar stack">
           <OmniBar fields={fields} filters={filters} hidden={{ tab: filters.tab === 'new' ? undefined : filters.tab, sort: filters.sort }} />
@@ -539,8 +546,7 @@ export const ReportView = ({ model, filters, fields }: { model: ReportModel; fil
   return (
     <Layout title={`Report ${model.label}`} path="/">
       <div class="no-print stack-half">
-        <OmniBar fields={fields} filters={filters} hidden={{ view: 'report' }}>
-        </OmniBar>
+        <OmniBar fields={fields} filters={filters} hidden={{ view: 'report' }} />
       </div>
       <h1>Regulatory and enforcement summary</h1>
       <p class="sub">
