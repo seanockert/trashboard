@@ -87,7 +87,7 @@ app.get('/', async (c) => {
   const dates = nextDays(now, DUE_DAYS);
   const [page, due] = await Promise.all([
     inboxPage(c.env.DB)({ scope, defaultPeriod: periodRange(DEFAULT_PERIOD, now), tab: filters.tab, sort: sortOf(filters), limit: PAGE_SIZE, offset: (filters.page - 1) * PAGE_SIZE }),
-    filters.tab === 'done' ? Promise.resolve([]) : dueItems(c.env.DB)({ scope, dates, actingOnly: filters.tab === 'acting' }),
+    dueItems(c.env.DB)({ scope, dates }),
   ]);
   const model = { rows: toRows(page.rows), counts: page.counts, due: dateEntries({ rows: toRows(due), ...dates }), reportQuarter: quarterOf(now) };
   return c.html(<InboxPage model={model} filters={filters} fields={fields} />);
@@ -113,6 +113,7 @@ app.get('/search', async (c) => {
 });
 
 // "new" resets item. No note keeps stored note.
+// Script saves in background (X-Triage header): no page to send back.
 app.post('/triage', async (c) => {
   const form = z
     .object({ itemId: z.string().min(1).max(500), status: z.union([TriageStatus, z.literal('new')]), note: z.string().max(500).optional(), back: z.string().optional() })
@@ -120,6 +121,7 @@ app.post('/triage', async (c) => {
   if (!form.success) return c.text('Bad request', 400);
   const { itemId, status, note, back } = form.data;
   await saveTriage(c.env.DB)({ itemId, status: status === 'new' ? null : status, note: note?.trim() ?? null, now: new Date() });
+  if (c.req.header('X-Triage') === '1') return c.body(null, 204);
   return c.redirect(safeNext(back));
 });
 

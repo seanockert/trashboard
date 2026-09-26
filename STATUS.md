@@ -22,7 +22,7 @@ Workers AI writes a short summary for each card that the views show by default.
 | Inbox: one ranked list of regulatory items and enforcement records, with New, Acting and Done tabs | Done |
 | Search (D1 full-text search, then Jev rerank) | Done |
 | Password login, 5 attempts each minute for each IP address | Done |
-| Triage on each card: Act, Dismiss, a note while acting, Done | Done |
+| Triage on each card: Act, Dismiss, a note while acting, Done. Swipe on touch, Undo, sound (off by default) | Done |
 | Due dates at the top of the inbox (submission close dates and start dates from the source text, next 30 days) | Done |
 | Company tag on regulatory items. Items that name JJ Richards are always shown, first | Done |
 | Omni-bar filters with suggestions: period (also each quarter), jurisdiction, topic, type, company | Done |
@@ -163,6 +163,16 @@ A better measure is precision above a priority threshold, and recall on a labell
 - Apply the migrations: `npm run db:migrate:remote`. The live database has data, thus a schema change is a new migration file. `npm run db:reset:remote` deletes all tables and data.
 - After the deploy, click "Tag and summarise waiting items" on the Sources page. Tag version 4 changes the questions, thus the views are empty until the items have new tags.
 - Set the secrets: `TYPESAFE_API_KEY`, `DASHBOARD_PASSWORD`, `SESSION_SECRET`.
+
+## Preview deploy
+
+`npm run deploy:preview` uploads the current branch to https://pop-trashboard.seanockert.workers.dev. It does not change the live site. Each upload moves the `pop` alias to the new version.
+
+- Run it from the branch to preview, not from `main`. Do not run `npm run deploy` from that branch: that makes the branch live.
+- The preview uses the live database, secrets and queues. Triage in the preview changes the live inbox.
+- Cron and queue consumers run only on the live version.
+- The session cookie is for one host: log in again on the preview.
+- Workers Logs and `wrangler tail` do not show preview requests.
 
 ## Next (v2 and later)
 

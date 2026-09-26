@@ -5,29 +5,6 @@ const NAV = [
   { href: '/search', label: 'Search' },
 ] as const;
 
-const INTRO_KEY = 'trashboard_intro';
-
-// htmx swaps body, does not run script again: listeners on document.
-const SCRIPT = `
-const showIntro = () => {
-  const intro = document.getElementById('intro');
-  if (intro && !localStorage.getItem('${INTRO_KEY}')) intro.showModal();
-};
-showIntro();
-document.addEventListener('htmx:afterSwap', showIntro);
-document.addEventListener('close', (e) => { if (e.target.id === 'intro') localStorage.setItem('${INTRO_KEY}', '1'); }, true);
-document.addEventListener('click', (e) => {
-  if (e.target.id === 'intro') e.target.close();
-  document.querySelectorAll('details.menu[open]').forEach((menu) => { if (!menu.contains(e.target)) menu.open = false; });
-});
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') document.querySelectorAll('details.menu[open]').forEach((menu) => { menu.open = false; menu.querySelector('summary').focus(); });
-  if (e.key !== '/' || e.target.closest('input, select, textarea')) return;
-  e.preventDefault();
-  document.getElementById('q')?.focus();
-});
-`;
-
 const MenuIcon = () => (
   <svg width="22" height="22" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
     <path stroke-linecap="round" stroke-linejoin="round" d="M3.8 6.8h16.5M3.8 12h16.5M3.8 17.3h16.5"/>
@@ -60,8 +37,8 @@ export const Layout = ({ title, path, menu, children }: { title: string; path: s
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width, viewport-fit=cover, initial-scale=1.0, interactive-widget=resizes-content" />
       <meta name="robots" content="noindex" />
-      <meta name="theme-color" content="#f6f6f3" media="(prefers-color-scheme: light)" />
-      <meta name="theme-color" content="#131514" media="(prefers-color-scheme: dark)" />
+      <meta name="theme-color" content="#f7f3e9" media="(prefers-color-scheme: light)" />
+      <meta name="theme-color" content="#151723" media="(prefers-color-scheme: dark)" />
       <meta name="mobile-web-app-capable" content="yes" />
       <meta name="apple-mobile-web-app-capable" content="yes" />
       <meta name="apple-mobile-web-app-title" content="Trashboard" />
@@ -74,16 +51,19 @@ export const Layout = ({ title, path, menu, children }: { title: string; path: s
       <link rel="stylesheet" href="/assets/styles.css" />
       <script src="/assets/htmx-2.0.11.min.js" defer />
       <script src="/assets/omnibar.js" defer />
-      <script type="module" dangerouslySetInnerHTML={{ __html: SCRIPT }} />
+      <script src="/assets/app.js" type="module" />
       <link rel="preconnect" href="https://fonts.googleapis.com" />
       <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" />
-      <link href="https://fonts.googleapis.com/css2?family=Fira+Sans:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet" />
+      <link href="https://fonts.googleapis.com/css2?family=Bungee&family=Figtree:wght@400;500;700;800&display=swap" rel="stylesheet" />
     </head>
     <body hx-boost="true">
       {path !== null && (
-        <header class="top inline-wrap">
-          <div class="brand inline-zero"><img src="/assets/trashboard-icon-sm.png" alt="" /> Trashboard</div>
-          <nav class="inline" aria-label="Main">
+        <header class="top inline">
+          <a class="brand inline-half" href="/">
+            <img src="/assets/trashboard-icon-sm.png" alt="" />
+            <span>Trashboard</span>
+          </a>
+          <nav class="inline-half" aria-label="Main">
             {NAV.map((link) => (
               <a href={link.href} class={path === link.href ? 'on' : ''} aria-current={path === link.href ? 'page' : undefined}>
                 {link.label}
@@ -94,8 +74,11 @@ export const Layout = ({ title, path, menu, children }: { title: string; path: s
             <summary aria-label="Menu" title="Menu">
               <MenuIcon />
             </summary>
-            <div class="items stack-zero">
+            <div class="items stack-quarter">
               {menu}
+              <button type="button" role="switch" aria-checked="false" data-sound>
+                Sound <span class="switch" aria-hidden="true" />
+              </button>
               <button type="button" onclick="document.getElementById('intro').showModal()">Show welcome</button>
               <a href="/sources">Sources</a>
               <a href="/logout">Log out</a>

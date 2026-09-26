@@ -337,11 +337,11 @@ export const inboxPage = (db: D1Database) => async (q: InboxQuery) => {
   };
 };
 
-export const dueItems = (db: D1Database) => async ({ scope, dates, actingOnly = false }: { scope: Scope; dates: Period; actingOnly?: boolean }) => {
+export const dueItems = (db: D1Database) => async ({ scope, dates }: { scope: Scope; dates: Period }) => {
   const where = whereOf([
     ...scopeClauses({ ...scope, period: undefined }),
     clause(IN_INBOX_SQL),
-    clause(actingOnly ? `triage.status = 'acting'` : `(triage.status IS NULL OR triage.status = 'acting')`),
+    clause(`(triage.status IS NULL OR triage.status = 'acting')`),
     clause('((closes_on BETWEEN ? AND ?) OR (starts_on BETWEEN ? AND ?))', dates.from, dates.to, dates.from, dates.to),
   ]);
   const result = await db
