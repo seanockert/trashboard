@@ -121,6 +121,7 @@ const startOmni = () => {
         if (!entry.head) return row(entry, i++);
         const head = document.createElement('div');
         head.className = 'omni-head';
+        head.setAttribute('role', 'presentation');
         head.textContent = entry.head;
         return head;
       }),
@@ -132,7 +133,10 @@ const startOmni = () => {
   };
 
   const highlight = () => {
-    pop.querySelectorAll('.omni-item').forEach((el, i) => el.classList.toggle('on', i === active));
+    pop.querySelectorAll('.omni-item').forEach((el, i) => {
+      el.classList.toggle('on', i === active);
+      el.setAttribute('aria-selected', String(i === active));
+    });
     if (active >= 0) {
       input.setAttribute('aria-activedescendant', `omni-${active}`);
       pop.querySelector(`#omni-${active}`)?.scrollIntoView({ block: 'nearest' });

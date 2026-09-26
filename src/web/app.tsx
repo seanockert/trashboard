@@ -87,7 +87,7 @@ app.get('/', async (c) => {
   const dates = nextDays(now, DUE_DAYS);
   const [page, due] = await Promise.all([
     inboxPage(c.env.DB)({ scope, defaultPeriod: periodRange(DEFAULT_PERIOD, now), tab: filters.tab, sort: sortOf(filters), limit: PAGE_SIZE, offset: (filters.page - 1) * PAGE_SIZE }),
-    filters.tab === 'done' ? Promise.resolve([]) : dueItems(c.env.DB)({ scope, dates, actingOnly: filters.tab === 'acting' }),
+    dueItems(c.env.DB)({ scope, dates }),
   ]);
   const model = { rows: toRows(page.rows), counts: page.counts, due: dateEntries({ rows: toRows(due), ...dates }), reportQuarter: quarterOf(now) };
   return c.html(<InboxPage model={model} filters={filters} fields={fields} />);

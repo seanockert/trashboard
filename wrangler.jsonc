@@ -31,7 +31,8 @@
 			"binding": "DB",
 			"database_name": "trashboard",
 			"database_id": "1e80d24a-e2ce-4f9a-b7af-d0b31aad10c0",
-			"migrations_dir": "migrations"
+			"migrations_dir": "migrations",
+			"remote": true
 		}
 	],
 	// Per IP. Counted per Cloudflare location, so approximate.
