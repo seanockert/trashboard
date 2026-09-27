@@ -99,8 +99,10 @@ app.get('/search', async (c) => {
   const filters = parseInboxFilters({}, now);
   const query = (c.req.query('q') ?? '').trim().slice(0, 300);
   if (query === '') return c.html(<SearchPage model={{ query, result: null, rows: [], scores: new Map(), penalties: [] }} filters={filters} fields={fields} />);
-  const result = await search({ db: c.env.DB, client: makeClient(readSecrets(c.env).TYPESAFE_API_KEY) })(query);
-  console.log(JSON.stringify({ event: 'search', shortlist: result.shortlist, hits: result.hits.length, ms: result.ms, costUsd: result.costUsd }));
+  const cache = { store: caches.default, origin: new URL(c.req.url).origin };
+  const result = await search({ db: c.env.DB, client: makeClient(readSecrets(c.env).TYPESAFE_API_KEY), cache })(query);
+  const { shortlist, failed, capped, cached, ms, costUsd } = result;
+  console.log(JSON.stringify({ event: 'search', shortlist, hits: result.hits.length, failed, capped, cached, ms, costUsd }));
   const triage = await triageFor(c.env.DB)(result.hits.map((hit) => hit.item.id));
   const model = {
     query,
