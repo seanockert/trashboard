@@ -797,18 +797,40 @@ td .pill {
 
 .due-item {
   display: grid;
-  grid-template-columns: 4.5rem 1fr;
+  grid-template-columns: 3rem 1fr;
   gap: var(--size-base);
 }
 
 .due-date {
   font-size: var(--font-size-note);
-  font-weight: 600;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
+  line-height: 1;
+  text-align: center;
+
+  .due {
+    box-shadow: var(--shadow-float);
+    padding: var(--size-half) 0.625rem;
+    border-radius: var(--size-2x);
+    background: var(--color-panel);
+    corner-shape: squircle;
+    text-transform: uppercase;
+    margin-inline: auto;
+  }
+
+  .due-month {
+    font-size: var(--font-size-small);
+    color: var(--color-error);
+  }
+
+  .due-day {
+    font-size: var(--font-size);
+  }
 
   .note {
     font-size: var(--font-size-small);
     font-weight: 400;
+    display: none;
   }
 }
 
