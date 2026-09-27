@@ -522,3 +522,13 @@ export const reportData = (db: D1Database) => async ({ scope }: { scope: Scope &
     acting: parseInbox(open ?? { results: [] }),
   };
 };
+
+export const jevTokensOn = (db: D1Database) => async (day: string) =>
+  Count.nullable().parse(await db.prepare('SELECT input_tokens AS n FROM jev_spend WHERE day = ?1').bind(day).first())?.n ?? 0;
+
+export const addJevTokens = (db: D1Database) => async ({ day, inputTokens }: { day: string; inputTokens: number }) => {
+  await db
+    .prepare('INSERT INTO jev_spend (day, input_tokens) VALUES (?1, ?2) ON CONFLICT (day) DO UPDATE SET input_tokens = input_tokens + ?2')
+    .bind(day, inputTokens)
+    .run();
+};

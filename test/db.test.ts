@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { inboxPage, saveAnswers, saveTriage, upsertItems, type Scope, type Tab } from '../src/db';
+import { addJevTokens, inboxPage, saveAnswers, saveTriage, upsertItems, type Scope, type Tab } from '../src/db';
 import type { NewItem } from '../src/items';
 import { TAG_VERSION } from '../src/jev/questions';
 import { handleItemQueueMessage, ingestPage } from '../src/pipeline';
@@ -161,6 +161,18 @@ describe('item queue', () => {
 
     env.ITEM_QUEUE.sendBatch.mockClear();
     await handleItemQueueMessage({ env: env as unknown as Env, message: { type: 'tag', itemIds, attempt: 5 } });
+    expect(env.ITEM_QUEUE.sendBatch).not.toHaveBeenCalled();
+  });
+
+  it('does not ask Jev or requeue after the daily cap', async () => {
+    const t = testDb();
+    const env = { DB: t.db, ...queues(), TYPESAFE_API_KEY: 'key', DASHBOARD_PASSWORD: 'password', SESSION_SECRET: 'x'.repeat(32) };
+    const itemIds = await upsertItems(t.db)({ sourceId: 'test', items: [item('a')], now });
+    await addJevTokens(t.db)({ day: new Date().toLocaleDateString('en-CA', { timeZone: 'Australia/Brisbane' }), inputTokens: 1e9 });
+    respond({ error: 'Bad request' }, 400);
+
+    await handleItemQueueMessage({ env: env as unknown as Env, message: { type: 'tag', itemIds, attempt: 1 } });
+    expect(fetch).not.toHaveBeenCalled();
     expect(env.ITEM_QUEUE.sendBatch).not.toHaveBeenCalled();
   });
 });

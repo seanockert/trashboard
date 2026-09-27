@@ -4,6 +4,7 @@ import { readSecrets } from './env';
 import { BODY_MAX, NewItem, type StoredItem } from './items';
 import { COMPANY_RULE_VERSION, groupOf, isCompanyName, PARTIES_VERSION } from './parties';
 import { chunks, deleteParties, getItems, getSourceState, recordRun, saveAnswers, saveDetail, saveGroups, saveSummary, sourcesRunBefore, staleGroupIds, unsummarisedIds, untaggedAmong, untaggedIds, upsertItems } from './db';
+import { capReached, recordSpend } from './jev/spend';
 import { makeClient, tagItem, USD_PER_MILLION_INPUT_TOKENS } from './jev/tag';
 import { TAG_VERSION } from './jev/questions';
 import { SOURCES, sourceById } from './sources';
@@ -223,6 +224,11 @@ const regroupItems = async ({ env, itemIds }: { env: Env; itemIds: string[] }) =
 const processItems = async ({ env, itemIds, detailRequired }: { env: Env; itemIds: string[]; detailRequired: boolean }) => {
   const client = makeClient(readSecrets(env).TYPESAFE_API_KEY);
   const loaded = await getItems(env.DB)(await untaggedAmong(env.DB)({ version: TAG_VERSION, ids: itemIds }));
+  // Cap reached: no requeue. The daily run sends untagged items again.
+  if (loaded.length > 0 && (await capReached(env.DB)())) {
+    console.log(JSON.stringify({ event: 'jev_cap_reached', skipped: loaded.length }));
+    return [];
+  }
   const detailed = await Promise.allSettled(loaded.map((item) => withDetail({ env, item, required: detailRequired })));
   const ready = detailed.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []));
   const detailFailures = detailed.flatMap((result, i) => (result.status === 'rejected' ? [loaded[i]?.id ?? ''] : []));
@@ -231,6 +237,8 @@ const processItems = async ({ env, itemIds, detailRequired }: { env: Env; itemId
   });
 
   const results = await Promise.all(ready.map(tagItem(client)));
+  const inputTokens = results.reduce((sum, result) => sum + (result.isOk() ? result.value.inputTokens : 0), 0);
+  await recordSpend(env.DB)({ inputTokens });
   const now = new Date();
   // A failed save requeues only that item.
   const tagged = results.flatMap((result, i) => {
@@ -244,7 +252,6 @@ const processItems = async ({ env, itemIds, detailRequired }: { env: Env; itemId
   const failedIds = new Set([...tagFailures, ...saveFailures].map((failure) => failure.itemId));
   await summariseItems({ env, items: ready.filter((item) => !failedIds.has(item.id)) });
   tagFailures.forEach((failure) => console.error(JSON.stringify({ event: 'tag_failed', itemId: failure.itemId, error: String(failure.cause) })));
-  const inputTokens = results.reduce((sum, result) => sum + (result.isOk() ? result.value.inputTokens : 0), 0);
   console.log(
     JSON.stringify({
       event: 'tag_batch',

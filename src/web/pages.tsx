@@ -739,9 +739,12 @@ export const SearchPage = ({ model, filters, fields }: { model: SearchModel; fil
             </>
           ))}
         </p>
+      ) : model.result.capped ? (
+        <div class="empty">Daily AI budget spent. The tip opens again tomorrow.</div>
       ) : (
         <>
           <p class="sub">{plural(model.rows.length, 'result')}. Best finds on top.</p>
+          {model.result.failed > 0 && <p class="note">The AI missed {plural(model.result.failed, 'item')}. Search again for a full dig.</p>}
           <PenaltyTable rows={model.penalties} />
           {model.rows.length === 0 ? (
             <div class="empty">Dug through the whole tip. Nothing. Try other words.</div>
