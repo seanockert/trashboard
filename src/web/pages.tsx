@@ -371,7 +371,10 @@ const DateTable = ({ entries }: { entries: DateEntry[] }) => (
   </div>
 );
 
-const shortDate = (iso: string) => new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+const day = (iso: string) => Number(iso.slice(8));
+
+const month = (iso: string) =>
+  new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-AU', { month: 'short', timeZone: 'UTC' }).slice(0, 3);
 
 const daysFrom = (from: string, to: string) => {
   const days = Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000);
@@ -383,7 +386,7 @@ const DueList = ({ entries }: { entries: DateEntry[] }) => {
   const now = today();
   return (
     <details class="due">
-      <summary>
+      <summary class="inline-between">
         <h2>Due in the next {DUE_DAYS} days</h2>
         <div class="note">{entries.length}</div>
       </summary>
@@ -393,8 +396,11 @@ const DueList = ({ entries }: { entries: DateEntry[] }) => {
         <ul class="stack">
           {entries.map((entry) => (
             <li class="due-item">
-              <div class="due-date">
-                <div>{shortDate(entry.date)}</div>
+              <div class="due-date stack-quarter" title={daysFrom(now, entry.date)}>
+                <div class="due">
+                  <div class="due-month">{month(entry.date)}</div>
+                  <div class="due-day">{day(entry.date)}</div>
+                </div>
                 <div class="note">{daysFrom(now, entry.date)}</div>
               </div>
               <div class="stack-quarter">
